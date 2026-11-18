@@ -101,8 +101,12 @@ Buka sheet **`Konfigurasi`** dan isi `Value`:
 | `KIRIM_XLSX` | `ya` | `ya` kirim rekap sebagai teks link Drive (attachment tidak didukung) |
 | `KOMPRES_FOTO` | `ya` | `ya` kecilkan foto sebelum disimpan ke Drive |
 | `COMPRESSO_TOKEN` | `xxxx` | Token api.compresso.space bila `KOMPRES_FOTO=ya` |
+| `JAM_TUTUP` | `10:00` | `HH:MM WIB` waktu tutup form & kirim rekap WA harian |
+| `JAM_TEPAT_WAKTU` | `08:00` | `HH:MM WIB` batas telat untuk keterangan terlambat |
 | `PUBLIK_ALASAN` | `ya` | `ya` tampilkan alasan pada tab Daftar publik |
 | `PUBLIK_FOTO` | `tidak` | `ya` tampilkan foto thumbnail pada tab Daftar publik |
+| `PUBLIK_HARI` | `7` | Jumlah hari yang ditampilkan pada tab Daftar publik |
+| `CACHE_DAFTAR_DETIK` | `20` | Lama cache tab Daftar publik (detik) |
 | `TARGET_WA` | `nomor` | `nomor` kirim ke `NO_WA_GURU`, `grup` kirim ke `ID_GRUP_WA` |
 | `ID_GRUP_WA` | `1203630...@g.us` | ID grup WhatsApp bila `TARGET_WA=grup` |
 | `NAMA_GRUP_WA` | `Kelas Kebekerjaan LN` | Nama grup untuk label dan pemeriksaan tujuan |

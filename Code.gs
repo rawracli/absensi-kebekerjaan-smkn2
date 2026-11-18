@@ -76,8 +76,50 @@ const CONFIG = Object.freeze({
 });
 
 const SECONDS_PER_MINUTE = 60;
-const CUTOFF_SECONDS = CONFIG.CUTOFF_HOUR * 3600;
-const ONTIME_SECONDS = CONFIG.ONTIME_HOUR * 3600;
+
+/** Parse "HH:MM" (00-23:00-59) -> detik sejak tengah malam; 0 bila tidak valid. */
+function timeToSeconds_(label) {
+  const m = String(label || '').trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return 0;
+  return Number(m[1]) * 3600 + Number(m[2]) * 60;
+}
+
+/** "HH:MM" dari detik sejak tengah malam. */
+function secondsToTimeLabel_(secs) {
+  const total = (((Number(secs) || 0) % 86400) + 86400) % 86400;
+  return pad2_(Math.floor(total / 3600)) + ':' + pad2_(Math.floor((total % 3600) / 60));
+}
+
+/** Detik batas akhir pengisian dari konfigurasi (fallback CONFIG.CUTOFF_HOUR). */
+function cutoffSeconds_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
+  return secs > 0 ? secs : CONFIG.CUTOFF_HOUR * 3600;
+}
+
+/** Detik batas tepat waktu dari konfigurasi (fallback CONFIG.ONTIME_HOUR). */
+function onTimeCfgSeconds_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TEPAT_WAKTU);
+  return secs > 0 ? secs : CONFIG.ONTIME_HOUR * 3600;
+}
+
+/** Label "HH:MM" batas akhir, dari konfigurasi atau fallback. */
+function cutoffLabel_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
+  return secs > 0 ? secondsToTimeLabel_(secs) : pad2_(CONFIG.CUTOFF_HOUR) + ':00';
+}
+
+/** Label "HH:MM" batas tepat waktu, dari konfigurasi atau fallback. */
+function onTimeLabel_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TEPAT_WAKTU);
+  return secs > 0 ? secondsToTimeLabel_(secs) : pad2_(CONFIG.ONTIME_HOUR) + ':00';
+}
+
+/** Angka konfigurasi integer non-negatif (fallback bila kosong/tidak valid). */
+function cfgInt_(cfg, key, fallback) {
+  const raw = String((cfg && cfg[key]) == null ? '' : cfg[key]).trim();
+  const n = parseInt(raw, 10);
+  return isNaN(n) || n < 0 ? fallback : n;
+}
 
 const HARI_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 const BULAN_ID = [
@@ -199,7 +241,8 @@ function shiftDateStr_(dateStr, delta) {
  * Snapshot waktu server dalam zona Asia/Jakarta.
  * Dipakai untuk SEMUA keputusan waktu (buka/tutup, keterlambatan, tanggal).
  */
-function nowWib_() {
+function nowWib_(cfg) {
+  const cutoffSeconds = cutoffSeconds_(cfg);
   const now = new Date();
   const parts = Utilities
     .formatDate(now, CONFIG.TIMEZONE, 'yyyy-MM-dd HH:mm:ss')
@@ -231,8 +274,8 @@ function nowWib_() {
     timeLabel: pad2_(hour) + ':' + pad2_(minute) + ':' + pad2_(second),
     dayOfWeek: wibDayOfWeek_(year, month, day),
     dayStartEpochMs: dayStartEpochMs,
-    cutoffEpochMs: dayStartEpochMs + CUTOFF_SECONDS * 1000,
-    isPastCutoff: secondsOfDay >= CUTOFF_SECONDS
+    cutoffEpochMs: dayStartEpochMs + cutoffSeconds_(cfg) * 1000,
+    isPastCutoff: secondsOfDay >= cutoffSeconds_(cfg)
   };
 }
 
@@ -365,12 +408,13 @@ function resolveActiveDay_(wib, cfg) {
 }
 
 /**
- * Menit keterlambatan penuh sejak 08:00:00 WIB pada hari yang sama.
- * Contoh: 08:00:59 -> 0 menit, 08:01:00 -> 1 menit, 09:12:30 -> 72 menit.
+ * Menit keterlambatan penuh sejak batas tepat waktu (JAM_TEPAT_WAKTU) pada
+ * hari yang sama. Contoh: 08:00:59 -> 0 menit, 08:01:00 -> 1 menit.
  */
-function calculateLateness_(wib) {
-  if (wib.secondsOfDay <= ONTIME_SECONDS) return 0;
-  return Math.floor((wib.secondsOfDay - ONTIME_SECONDS) / SECONDS_PER_MINUTE);
+function calculateLateness_(wib, cfg) {
+  const onTime = onTimeCfgSeconds_(cfg);
+  if (wib.secondsOfDay <= onTime) return 0;
+  return Math.floor((wib.secondsOfDay - onTime) / SECONDS_PER_MINUTE);
 }
 
 /* ========================================================================== */
@@ -514,6 +558,10 @@ function configDefaults_() {
     ID_GRUP_WA: '',
     PUBLIK_ALASAN: 'ya',
     PUBLIK_FOTO: 'tidak',
+    PUBLIK_HARI: String(CONFIG.PUBLIC_DAYS),
+    CACHE_DAFTAR_DETIK: String(CONFIG.LIST_CACHE_SECONDS),
+    JAM_TUTUP: '10:00',          // batas akhir pengisian (HH:MM WIB)
+    JAM_TEPAT_WAKTU: '08:00',   // batas tepat waktu (HH:MM WIB)
     MODE_UJI: 'tidak',
     HARI_AKTIF: CONFIG.DEFAULT_ACTIVE_DAYS,
     TANGGAL_LIBUR: '',
@@ -1075,7 +1123,7 @@ function getBootstrapData() {
     ensureSheets_();
 
     const cfg = getConfigMap_();
-    const wib = nowWib_();
+    const wib = nowWib_(cfg);
     const activeInfo = resolveActiveDay_(wib, cfg);
     const participants = getParticipants_();
     const todayLog = getLogByDate_(wib.dateStr);
@@ -1123,8 +1171,8 @@ function getBootstrapData() {
         },
         isActiveDay: activeInfo.isActive,
         activeDaysLabel: activeDaysLabel_(cfg),
-        cutoff: { label: pad2_(CONFIG.CUTOFF_HOUR) + ':00', epochMs: wib.cutoffEpochMs },
-        onTime: { label: pad2_(CONFIG.ONTIME_HOUR) + ':00' },
+        cutoff: { label: cutoffLabel_(cfg), epochMs: wib.cutoffEpochMs },
+        onTime: { label: onTimeLabel_(cfg) },
         isClosed: !!closedReason,
         closedReason: closedReason,
         normalClosedReason: normalClosedReason,
@@ -1164,10 +1212,12 @@ function getAttendanceList(dateStr) {
   try {
     ensureSheets_();
     const cfg = getConfigMap_();
-    const wib = nowWib_();
+    const wib = nowWib_(cfg);
+    const publicHari = cfgInt_(cfg, 'PUBLIK_HARI', CONFIG.PUBLIC_DAYS);
+    const listCacheSeconds = cfgInt_(cfg, 'CACHE_DAFTAR_DETIK', CONFIG.LIST_CACHE_SECONDS);
 
     const today = wib.dateStr;
-    const earliest = shiftDateStr_(today, -(CONFIG.PUBLIC_DAYS - 1));
+    const earliest = shiftDateStr_(today, -(publicHari - 1));
 
     let target = toDateStr_(dateStr || today);
     if (!target || target > today || target < earliest) target = today;
@@ -1231,7 +1281,7 @@ function getAttendanceList(dateStr) {
     });
 
     const dates = [];
-    for (let i = 0; i < CONFIG.PUBLIC_DAYS; i++) {
+    for (let i = 0; i < publicHari; i++) {
       const value = shiftDateStr_(today, -i);
       dates.push({ value: value, label: dateLabel_(value) });
     }
@@ -1261,7 +1311,7 @@ function getAttendanceList(dateStr) {
     };
 
     if (cache) {
-      try { cache.put(cacheKey, JSON.stringify(data), CONFIG.LIST_CACHE_SECONDS); } catch (err) { /* abaikan */ }
+      try { cache.put(cacheKey, JSON.stringify(data), listCacheSeconds); } catch (err) { /* abaikan */ }
     }
 
     return { ok: true, data: data };
@@ -1376,10 +1426,17 @@ function formatLogTime_(value) {
  * baru selesai setelah pukul 10:00.
  */
 function submitAttendance(payload) {
-  const requestWib = nowWib_();
   let lock = null;
 
   try {
+    // Konfigurasi dibaca awal agar batas tepat waktu/cutoff memakai nilai
+    // terbaru dari sheet Konfigurasi. Bila sheet belum siap, nilai bawaan
+    // (CONFIG) yang dipakai.
+    let cfgAwal = null;
+    try { cfgAwal = getConfigMap_(); } catch (errCfg) { cfgAwal = null; }
+
+    const requestWib = nowWib_(cfgAwal);
+
     if (!payload || typeof payload !== 'object') {
       throw new AppError('INVALID_PAYLOAD', 'Data absensi tidak lengkap. Silakan muat ulang halaman.');
     }
@@ -1407,14 +1464,14 @@ function submitAttendance(payload) {
       .trim();
 
     // Hitung keterlambatan lebih dulu: Hadir setelah 08:00 WIB wajib alasan.
-    const terlambat = status === 'Hadir' ? calculateLateness_(requestWib) : 0;
+    const terlambat = status === 'Hadir' ? calculateLateness_(requestWib, cfgAwal) : 0;
 
     if (status === 'Hadir') {
       if (terlambat > 0) {
         if (keterangan.length < 3) {
           throw new AppError(
             'REASON_REQUIRED',
-            'Keterangan wajib diisi minimal 3 karakter karena absen telat setelah pukul 08:00 WIB.'
+            'Keterangan wajib diisi minimal 3 karakter karena absen telat setelah pukul ' + onTimeLabel_(cfgAwal) + ' WIB.'
           );
         }
         if (keterangan.length > CONFIG.MAX_REASON_LENGTH) {
@@ -1454,6 +1511,9 @@ function submitAttendance(payload) {
     /* --------------------- 3. Cek hari aktif & cutoff --------------------- */
 
     const cfg = getConfigMap_();
+    // Samakan status cutoff bila konfigurasi berubah sejak request diterima.
+    requestWib.isPastCutoff = requestWib.secondsOfDay >= cutoffSeconds_(cfg);
+    requestWib.cutoffEpochMs = requestWib.dayStartEpochMs + cutoffSeconds_(cfg) * 1000;
     const activeInfo = resolveActiveDay_(requestWib, cfg);
     const testMode = isTestMode_(cfg);
 
@@ -1471,7 +1531,7 @@ function submitAttendance(payload) {
       throw new AppError(
         'CLOSED',
         'Absensi hari ini sudah ditutup. Batas waktu pengisian pukul ' +
-        pad2_(CONFIG.CUTOFF_HOUR) + ':00 WIB telah berakhir.'
+        cutoffLabel_(cfg) + ' WIB telah berakhir.'
       );
     }
 
@@ -1672,11 +1732,12 @@ function runDailyClosing_(forceSend) {
      * Trigger timeBased bisa menyala sedikit lebih awal. Bila itu terjadi,
      * tunggu sampai batas 10:00 WIB agar tidak menandai Alpha terlalu dini.
      */
-    if (wib.secondsOfDay < CUTOFF_SECONDS) {
-      const waitMs = (CUTOFF_SECONDS - wib.secondsOfDay) * 1000 + 1000;
+    const cutoffSec = cutoffSeconds_(cfg);
+    if (wib.secondsOfDay < cutoffSec) {
+      const waitMs = (cutoffSec - wib.secondsOfDay) * 1000 + 1000;
       if (waitMs <= 120000) {
         Utilities.sleep(waitMs);
-        wib = nowWib_();
+        wib = nowWib_(cfg);
       }
     }
 
@@ -1706,7 +1767,7 @@ function runDailyClosing_(forceSend) {
           p.nama,
           'Alpha',
           0,
-          'Tidak mengisi absensi hingga pukul ' + pad2_(CONFIG.CUTOFF_HOUR) + ':00',
+          'Tidak mengisi absensi hingga pukul ' + cutoffLabel_(cfg),
           '-'
         ]);
       });
@@ -1719,7 +1780,7 @@ function runDailyClosing_(forceSend) {
     /* ----------------------------- Susun rekap ----------------------------- */
 
     const finalLog = getLogByDate_(dateStr);
-    const report = buildWaReport_(dateStr, participants, finalLog);
+    const report = buildWaReport_(dateStr, participants, finalLog, cfg);
 
     /* ------------------------- Kirim laporan ------------------------- */
 
@@ -1801,7 +1862,7 @@ function runDailyClosing_(forceSend) {
  * Menyusun teks rekap WhatsApp + ringkasan hitungan.
  * @return {{text: string, counts: Object}}
  */
-function buildWaReport_(dateStr, participants, logRows) {
+function buildWaReport_(dateStr, participants, logRows, cfg) {
   const byName = {};
   logRows.forEach(function (row) {
     byName[normKey_(row.nama)] = row;
@@ -1875,7 +1936,7 @@ function buildWaReport_(dateStr, participants, logRows) {
   const out = [];
   out.push('*LAPORAN ABSENSI HARIAN*');
   out.push(dateLabel_(dateStr));
-  out.push('Batas pengisian: ' + pad2_(CONFIG.CUTOFF_HOUR) + ':00 WIB');
+  out.push('Batas pengisian: ' + cutoffLabel_(cfg) + ' WIB');
   out.push('');
   out.push('*RINGKASAN*');
   out.push('Total peserta: ' + counts.total);
@@ -2628,8 +2689,9 @@ function sendTestWA() {
 /** Pratinjau rekap hari ini tanpa mengirim WhatsApp. */
 function previewLaporanHariIni() {
   ensureSheets_();
-  const wib = nowWib_();
-  const report = buildWaReport_(wib.dateStr, getParticipants_(), getLogByDate_(wib.dateStr));
+  const cfg = getConfigMap_();
+  const wib = nowWib_(cfg);
+  const report = buildWaReport_(wib.dateStr, getParticipants_(), getLogByDate_(wib.dateStr), cfg);
   Logger.log(report.text);
   Logger.log(JSON.stringify(report.counts, null, 2));
   return report;
@@ -2646,10 +2708,10 @@ function previewLaporanHariIni() {
 function ujiBuatXlsx(dateStr) {
   ensureSheets_();
   const cfg = getConfigMap_();
-  const wib = nowWib_();
+  const wib = nowWib_(cfg);
   const tanggal = toDateStr_(dateStr || wib.dateStr) || wib.dateStr;
 
-  const report = buildWaReport_(tanggal, getParticipants_(), getLogByDate_(tanggal));
+  const report = buildWaReport_(tanggal, getParticipants_(), getLogByDate_(tanggal), cfg);
   const photos = collectPhotos_(tanggal);
   const info = buildDailyXlsx_(tanggal, report, cfg, photos);
 
@@ -2669,11 +2731,12 @@ function ujiBuatXlsx(dateStr) {
 function ujiKirimRekap() {
   ensureSheets_();
   const cfg = getConfigMap_();
-  const wib = nowWib_();
+  const wib = nowWib_(cfg);
   const report = buildWaReport_(
     wib.dateStr,
     getParticipants_(),
-    getLogByDate_(wib.dateStr)
+    getLogByDate_(wib.dateStr),
+    cfg
   );
 
   const prefix =
@@ -2746,8 +2809,15 @@ function formatSheets_(sheets) {
   config.getRange(2, 2, Math.max(config.getMaxRows() - 1, 1), 1).setWrap(true);
 }
 
+/** Ambil jam (0-23) dari label "HH:MM" dalam cfg, fallback ke CONFIG.CUTOFF_HOUR. */
+function triggerHour_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
+  if (secs > 0) return Math.floor(secs / 3600);
+  return CONFIG.CUTOFF_HOUR;
+}
+
 /** Hapus trigger lama untuk fungsi ini, lalu pasang trigger harian 10:00 WIB. */
-function installDailyTrigger_() {
+function installDailyTrigger_(cfg) {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'processDailyClosingAndSendWA') {
       ScriptApp.deleteTrigger(trigger);
@@ -2756,7 +2826,7 @@ function installDailyTrigger_() {
 
   ScriptApp.newTrigger('processDailyClosingAndSendWA')
     .timeBased()
-    .atHour(CONFIG.CUTOFF_HOUR)
+    .atHour(triggerHour_(cfg)) // jam configurable dari JAM_TUTUP
     .nearMinute(0)
     .everyDays(1)
     .inTimezone(CONFIG.TIMEZONE)
@@ -2774,7 +2844,7 @@ function installDailyTrigger_() {
  *   2. Membuat/memeriksa sheet Master_Peserta, Log_Absensi, Konfigurasi
  *   3. Mengisi 9 peserta contoh bila Master_Peserta masih kosong
  *   4. Membuat folder foto di Google Drive dan menyimpan ID-nya
- *   5. Memasang trigger harian processDailyClosingAndSendWA pukul 10:00 WIB
+ *   5. Memasang trigger harian processDailyClosingAndSendWA sesuai JAM_TUTUP
  */
 function setupProject(waNumber, fonnteToken) {
   const wa = typeof waNumber === 'string' ? waNumber.trim() : '';
@@ -2805,12 +2875,12 @@ function setupProject(waNumber, fonnteToken) {
   if (token) updates.FONNTE_TOKEN = token;
   step_('simpan konfigurasi', function () { return setConfigValues_(updates); });
 
-  step_('pasang trigger harian', installDailyTrigger_);
+  const cfg = step_('muat konfigurasi', ensureConfigDefaults_);
+  step_('pasang trigger harian', function () { return installDailyTrigger_(cfg); });
 
   // Sekaligus menormalkan kolom Tanggal agar tidak lagi tersimpan sebagai Date.
   const perbaikanTanggal = step_('perbaiki kolom Tanggal', perbaikiTanggalLog);
 
-  const cfg = step_('muat konfigurasi', ensureConfigDefaults_);
   const belumDiisi = [];
   if (!cfg.NO_WA_GURU) belumDiisi.push('NO_WA_GURU');
   if (!cfg.FONNTE_TOKEN) belumDiisi.push('FONNTE_TOKEN');
@@ -2824,7 +2894,7 @@ function setupProject(waNumber, fonnteToken) {
     folderDrive: folder.getName(),
     folderDriveId: folder.getId(),
     trigger: 'processDailyClosingAndSendWA - setiap hari pukul ' +
-      pad2_(CONFIG.CUTOFF_HOUR) + ':00 ' + CONFIG.TIMEZONE,
+      cutoffLabel_(cfg) + ' ' + CONFIG.TIMEZONE,
     zonaWaktu: ss.getSpreadsheetTimeZone(),
     perbaikanTanggal: perbaikanTanggal,
     konfigurasiBelumDiisi: belumDiisi,

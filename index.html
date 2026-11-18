@@ -939,7 +939,7 @@ textarea.field{
         <line x1="12" y1="17" x2="12.01" y2="17"></line>
       </svg>
       <span>
-        <strong>MODE UJI AKTIF.</strong> Batas pukul 10:00 dan hari aktif diabaikan.
+        <strong>MODE UJI AKTIF.</strong> Batas pukul <span id="mode-uji-cutoff">—</span> dan hari aktif diabaikan.
         Data uji ditandai <code>[MODE UJI]</code>. Setelah selesai, ubah
         <code>MODE_UJI</code> menjadi <code>tidak</code> di sheet Konfigurasi.
       </span>
@@ -1101,7 +1101,7 @@ textarea.field{
       </button>
 
       <p class="fineprint">
-        Absensi ditutup pukul 10:00 WIB. Setiap peserta hanya dapat mengisi satu kali per hari.
+        Absensi ditutup pukul <span id="closing-time">—</span> WIB. Setiap peserta hanya dapat mengisi satu kali per hari.
       </p>
     </section>
 
@@ -1436,10 +1436,10 @@ textarea.field{
       const parts = String(data.onTime.label).split(':');
       return (Number(parts[0]) || 0) * 3600 + (Number(parts[1]) || 0) * 60;
     }
-    return 8 * 3600;
+    return 0;
   }
 
-  /** True bila jam server sudah melewati batas tepat waktu (08:00 WIB).
+  /** True bila jam server sudah melewati batas tepat waktu dari konfigurasi server.
    *  Selaras dengan backend: keterlambatan >= 1 menit (mulai 08:01:00 WIB). */
   function isLateNow() {
     return (secondsOfDayWib() - onTimeSeconds()) >= 60;
@@ -1778,6 +1778,12 @@ textarea.field{
     const data = state.data;
     $('header-date').textContent = data.today.label;
     $('header-clock').textContent = timeLabel(serverNow());
+
+    const cutoff = (data.cutoff && data.cutoff.label) ? data.cutoff.label : '—';
+    const elMode = $('mode-uji-cutoff');
+    if (elMode) elMode.textContent = cutoff;
+    const elClosing = $('closing-time');
+    if (elClosing) elClosing.textContent = cutoff;
 
     const banner = $('test-banner');
     if (banner) banner.hidden = !data.testMode;
@@ -2218,8 +2224,9 @@ textarea.field{
     $('step-photo').textContent = required ? '4' : '3';
 
     if (lateHadir) {
+      const onTimeLabelText = (state.data && state.data.onTime && state.data.onTime.label) ? state.data.onTime.label : '—';
       $('keterangan-title').textContent = 'Alasan keterlambatan';
-      $('keterangan-hint').textContent = 'Wajib diisi karena Anda mengisi absensi setelah pukul 08:00 WIB.';
+      $('keterangan-hint').textContent = 'Wajib diisi karena Anda mengisi absensi setelah pukul ' + onTimeLabelText + ' WIB.';
       $('keterangan-label').textContent = 'Tuliskan alasan keterlambatan';
     } else {
       $('keterangan-title').textContent = 'Keterangan / alasan';
@@ -2468,10 +2475,10 @@ textarea.field{
     const data = state.data || {
       stats: { submitted: 0, total: 0 },
       activeDaysLabel: 'hari aktif',
-      cutoff: { label: '10:00' }
+      cutoff: { label: '' }
     };
 
-    const cutoffLabel = (data.cutoff && data.cutoff.label) || '10:00';
+    const cutoffLabel = (data.cutoff && data.cutoff.label) || '';
     let title;
     let message;
     let icon = 'danger';
@@ -2479,7 +2486,9 @@ textarea.field{
 
     if (reason === 'cutoff') {
       title = 'Absensi Hari Ini Ditutup';
-      message = 'Batas waktu pengisian pukul ' + cutoffLabel + ' WIB telah berakhir.';
+      message = cutoffLabel
+        ? 'Batas waktu pengisian pukul ' + cutoffLabel + ' WIB telah berakhir.'
+        : 'Batas waktu pengisian telah berakhir.';
     } else if (reason === 'inactive') {
       title = 'Hari Ini Bukan Hari Absensi';
       message = 'Absensi hanya dibuka pada ' + (data.activeDaysLabel || 'hari aktif') + '.';
