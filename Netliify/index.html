@@ -1041,8 +1041,8 @@ textarea.field{
         <div class="card-head">
           <span class="step" id="step-photo">4</span>
           <div>
-            <h2 class="card-title">Foto kehadiran</h2>
-            <p class="card-hint">Diambil langsung dari kamera, bukan dari galeri.</p>
+            <h2 class="card-title" id="keterangan-title">Foto kehadiran</h2>
+            <p class="card-hint" id="keterangan-hint">Diambil langsung dari kamera, bukan dari galeri.</p>
           </div>
         </div>
 
@@ -1452,6 +1452,27 @@ textarea.field{
     return value === 'Hadir' && isLateNow();
   }
 
+  /** Update judul dan hint foto berdasarkan status saat ini. */
+  function updatePhotoCopy(status) {
+    const titleEl = document.getElementById('keterangan-title');
+    const hintEl = document.getElementById('keterangan-hint');
+    const statusLower = status.toLowerCase();
+
+    if (statusLower === 'hadir') {
+      titleEl.textContent = 'Foto Hadir';
+      hintEl.textContent = 'Diambil langsung dari kamera dengan latar belakang/lingkungan sekolah.';
+    } else if (status === 'Izin') {
+      titleEl.textContent = 'Foto Bukti Izin';
+      hintEl.textContent = 'Lampiran pendukung, misal surat izin, bukti keperluan, atau keterangan izin.';
+    } else if (status === 'Sakit') {
+      titleEl.textContent = 'Foto Bukti Sakit';
+      hintEl.textContent = 'Lampiran pendukung, misal surat sakit, hasil pemeriksaan, atau bukti kunjungan.';
+    } else {
+      titleEl.textContent = 'Foto kehadiran';
+      hintEl.textContent = 'Diambil langsung dari kamera, bukan dari galeri.';
+    }
+  }
+
   /* ====================================================================== */
   /*  LAPISAN API (GAS ATAU HOSTING STATIS)                                 */
   /* ====================================================================== */
@@ -1807,6 +1828,7 @@ textarea.field{
 
     setScreen('form');
     setKeteranganVisibility();
+    updatePhotoCopy(currentStatus());
     updateDeadline(serverNow());
   }
 
@@ -2549,6 +2571,7 @@ textarea.field{
       function (input) {
         input.addEventListener('change', function () {
           setKeteranganVisibility();
+          updatePhotoCopy(currentStatus());
           hideError('err-keterangan');
         });
       }

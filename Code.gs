@@ -513,6 +513,7 @@ function configDefaults_() {
     NAMA_GRUP_WA: 'Kelas Kebekerjaan LN',
     ID_GRUP_WA: '',
     PUBLIK_ALASAN: 'ya',
+    PUBLIK_FOTO: 'tidak',
     MODE_UJI: 'tidak',
     HARI_AKTIF: CONFIG.DEFAULT_ACTIVE_DAYS,
     TANGGAL_LIBUR: '',
@@ -1172,7 +1173,8 @@ function getAttendanceList(dateStr) {
     if (!target || target > today || target < earliest) target = today;
 
     const showReason = isEnabled_(cfg.PUBLIK_ALASAN);
-    const cacheKey = 'list:' + target + ':' + (showReason ? '1' : '0');
+    const showPhoto = isEnabled_(cfg.PUBLIK_FOTO);
+    const cacheKey = 'list:' + target + ':' + (showReason ? '1' : '0') + ':' + (showPhoto ? '1' : '0');
 
     let cache = null;
     try { cache = CacheService.getScriptCache(); } catch (err) { cache = null; }
@@ -1213,6 +1215,8 @@ function getAttendanceList(dateStr) {
       const link = row ? row.link : '';
       const fileId = driveFileId_(link);
       const hasPhoto = !!fileId && link.indexOf('http') === 0;
+      const fotoUrlFinal = showPhoto ? (hasPhoto ? link : '') : '';
+      const fotoThumbFinal = showPhoto ? (hasPhoto ? driveThumbUrl_(fileId, 600) : '') : '';
 
       rows.push({
         no: index + 1,
@@ -1221,8 +1225,8 @@ function getAttendanceList(dateStr) {
         jam: row ? formatLogTime_(row.timestamp) : '-',
         terlambat: row ? (Number(row.terlambat) || 0) : 0,
         keterangan: row && showReason && row.keterangan !== '-' ? row.keterangan : '',
-        fotoUrl: hasPhoto ? link : '',
-        fotoThumb: hasPhoto ? driveThumbUrl_(fileId, 600) : ''
+        fotoUrl: fotoUrlFinal,
+        fotoThumb: fotoThumbFinal
       });
     });
 
@@ -1244,6 +1248,7 @@ function getAttendanceList(dateStr) {
       hariIni: isToday,
       sudahTutup: !belumTutup,
       modeUji: isTestMode_(cfg),
+      showPhoto: showPhoto,
       jumlahFoto: logRows.filter(function (row) { return !!driveFileId_(row.link); }).length,
       stats: stats,
       rows: rows,
@@ -1251,7 +1256,8 @@ function getAttendanceList(dateStr) {
       xlsxUrl: xlsxUrl,
       catatan:
         'Daftar ini bersifat publik: nama, status, waktu, alasan, dan foto ' +
-        'dapat dilihat siapa pun yang memiliki tautan.'
+        'dapat dilihat siapa pun yang memiliki tautan.' +
+        (showPhoto ? '' : ' Foto disembunyikan berdasarkan PUBLIK_FOTO=tidak.')
     };
 
     if (cache) {

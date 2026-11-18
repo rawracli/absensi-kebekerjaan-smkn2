@@ -102,6 +102,7 @@ Buka sheet **`Konfigurasi`** dan isi `Value`:
 | `KOMPRES_FOTO` | `ya` | `ya` kecilkan foto sebelum disimpan ke Drive |
 | `COMPRESSO_TOKEN` | `xxxx` | Token api.compresso.space bila `KOMPRES_FOTO=ya` |
 | `PUBLIK_ALASAN` | `ya` | `ya` tampilkan alasan pada tab Daftar publik |
+| `PUBLIK_FOTO` | `tidak` | `ya` tampilkan foto thumbnail pada tab Daftar publik |
 | `TARGET_WA` | `nomor` | `nomor` kirim ke `NO_WA_GURU`, `grup` kirim ke `ID_GRUP_WA` |
 | `ID_GRUP_WA` | `1203630...@g.us` | ID grup WhatsApp bila `TARGET_WA=grup` |
 | `NAMA_GRUP_WA` | `Kelas Kebekerjaan LN` | Nama grup untuk label dan pemeriksaan tujuan |
