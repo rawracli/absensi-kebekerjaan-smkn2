@@ -1702,8 +1702,17 @@ function runDailyClosing_(forceSend) {
   try {
     ensureSheets_();
 
-    let wib = nowWib_();
-    const cfg = getConfigMap_();
+    // Sinkronkan trigger harian dengan JAM_TUTUP terbaru (bisa berubah
+    // setelah trigger dipasang) agar jam kirim otomatis mengikuti konfigurasi.
+    const triggerSync = ensureDailyTrigger_();
+
+    let cfg = getConfigMap_();
+    let wib = nowWib_(cfg);
+
+    if (triggerSync.changed) {
+      Logger.log('Trigger harian disesuaikan ke ' + triggerSync.hour + ':' +
+        pad2_(triggerSync.minute) + ' WIB.');
+    }
     const activeInfo = resolveActiveDay_(wib, cfg);
 
     if (isTestMode_(cfg)) {
@@ -2809,14 +2818,7 @@ function formatSheets_(sheets) {
   config.getRange(2, 2, Math.max(config.getMaxRows() - 1, 1), 1).setWrap(true);
 }
 
-/** Ambil jam (0-23) dari label "HH:MM" dalam cfg, fallback ke CONFIG.CUTOFF_HOUR. */
-function triggerHour_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
-  if (secs > 0) return Math.floor(secs / 3600);
-  return CONFIG.CUTOFF_HOUR;
-}
-
-/** Hapus trigger lama untuk fungsi ini, lalu pasang trigger harian 10:00 WIB. */
+/** Hapus trigger lama untuk fungsi ini, lalu pasang trigger harian sesuai JAM_TUTUP. */
 function installDailyTrigger_(cfg) {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'processDailyClosingAndSendWA') {
@@ -2826,11 +2828,51 @@ function installDailyTrigger_(cfg) {
 
   ScriptApp.newTrigger('processDailyClosingAndSendWA')
     .timeBased()
-    .atHour(triggerHour_(cfg)) // jam configurable dari JAM_TUTUP
-    .nearMinute(0)
+    .atHour(triggerHour_(cfg))
+    .nearMinute(triggerMinute_(cfg))
     .everyDays(1)
     .inTimezone(CONFIG.TIMEZONE)
     .create();
+}
+
+/**
+ * Sinkronkan trigger harian dengan JAM_TUTUP terbaru.
+ * Bila jam trigger berbedan dengan konfigurasi, trigger dipasang ulang
+ * otomatis. Bisa dijalankan manual dari editor Apps Script.
+ */
+function aturTriggerHarian() {
+  const result = ensureDailyTrigger_();
+  if (!result.ok) throw new Error(result.message);
+  Logger.log('Trigger harian: ' + (result.changed ? 'diperbarui' : 'sudah cocok') +
+    ' ke ' + pad2_(result.hour) + ':' + pad2_(result.minute) + ' WIB.');
+  return result;
+}
+
+/**
+ * Cocokkan trigger harian dengan JAM_TUTUP terbaru.
+ * Bila jam trigger berbeda dengan konfigurasi, trigger dipasang ulang
+ * otomatis sehingga tidak perlu setup ulang setelah ubah konfigurasi.
+ */
+function ensureDailyTrigger_() {
+  try {
+    const cfg = getConfigMap_();
+    const wantHour = triggerHour_(cfg);
+    const wantMinute = triggerMinute_(cfg);
+
+    const triggers = ScriptApp.getProjectTriggers();
+    for (let i = 0; i < triggers.length; i++) {
+      const t = triggers[i];
+      if (t.getHandlerFunction() !== 'processDailyClosingAndSendWA') continue;
+      if (t.getHour() === wantHour && t.getMinute() === wantMinute) {
+        return { ok: true, changed: false, hour: wantHour, minute: wantMinute };
+      }
+    }
+
+    installDailyTrigger_(cfg);
+    return { ok: true, changed: true, hour: wantHour, minute: wantMinute };
+  } catch (err) {
+    return { ok: false, message: String(err && err.message ? err.message : err) };
+  }
 }
 
 /**
