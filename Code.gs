@@ -1317,11 +1317,7 @@ function getAttendanceList(dateStr) {
       stats: stats,
       rows: rows,
       dates: dates,
-      xlsxUrl: xlsxUrl,
-      catatan:
-        'Daftar ini bersifat publik: nama, status, waktu, alasan, dan foto ' +
-        'dapat dilihat siapa pun yang memiliki tautan.' +
-        (showPhoto ? '' : ' Foto disembunyikan berdasarkan PUBLIK_FOTO=tidak.')
+      xlsxUrl: xlsxUrl
     };
 
     if (cache) {
