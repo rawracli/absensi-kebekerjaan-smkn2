@@ -37,6 +37,11 @@ Aturan tambahan:
 
 - **Satu peserta satu kali per hari.** Dicek di server di dalam `LockService`.
 - **Wajib foto kamera langsung** untuk semua status (Hadir, Izin, Sakit).
+- **Deteksi lokasi untuk status Hadir.** Peserta harus berada dalam radius
+  tertentu dari lokasi sekolah (`NAMA_LOKASI`, default **SMKN 2**). Koordinat
+  pusat (`LAT_SEKOLAH`, `LON_SEKOLAH`) dan `RADIUS_LOKASI` (meter) diatur di
+  sheet Konfigurasi. Deteksi tidak berlaku untuk Izin/Sakit. Validasi dilakukan
+  di server (bukan hanya browser). Set `WAJIB_LOKASI=tidak` untuk mematikan.
 - **Keterangan wajib** untuk Izin/Sakit (minimal 3 karakter), dan untuk **Hadir
   bila dikirim setelah 08:00:00 WIB** (alasan keterlambatan, minimal 3 karakter).
   Hadir pada atau sebelum 08:00:00 WIB tidak memerlukan keterangan (`-`).
@@ -103,6 +108,11 @@ Buka sheet **`Konfigurasi`** dan isi `Value`:
 | `COMPRESSO_TOKEN` | `xxxx` | Token api.compresso.space bila `KOMPRES_FOTO=ya` |
 | `JAM_TUTUP` | `10:00` | `HH:MM WIB` waktu tutup form & kirim rekap WA harian |
 | `JAM_TEPAT_WAKTU` | `08:00` | `HH:MM WIB` batas telat untuk keterangan terlambat |
+| `NAMA_LOKASI` | `SMKN 2` | Nama lokasi yang ditampilkan pada kartu lokasi |
+| `LAT_SEKOLAH` | `-6.934730751402668` | Latitude pusat lokasi absensi Hadir |
+| `LON_SEKOLAH` | `106.92613213306163` | Longitude pusat lokasi absensi Hadir |
+| `RADIUS_LOKASI` | `180` | Radius toleransi absensi Hadir (meter) |
+| `WAJIB_LOKASI` | `ya` | `ya` = Hadir wajib di dalam radius; `tidak` = nonaktif |
 | `PUBLIK_ALASAN` | `ya` | `ya` tampilkan alasan pada tab Daftar publik |
 | `PUBLIK_FOTO` | `tidak` | `ya` tampilkan foto thumbnail pada tab Daftar publik |
 | `PUBLIK_HARI` | `7` | Jumlah hari yang ditampilkan pada tab Daftar publik |
@@ -386,6 +396,9 @@ Tabel key-value (`Key` | `Value`) seperti pada bagian 3.3, ditambah jejak audit:
 | **“Absensi sudah ditutup”** | Waktu server ≥ 10:00:00 WIB. Ini by design. Cek jam di header (bersumber dari server, bukan HP). Untuk pengujian, set `MODE_UJI=ya`. |
 | **Ingin menguji setelah pukul 10:00** | Set `MODE_UJI=ya`, muat ulang halaman, kirim absensi uji (ditandai `[MODE UJI]`), lalu `ujiKirimRekap()` untuk menguji laporan + foto. Kembalikan ke `tidak` setelah selesai. |
 | **“Hari ini bukan hari absensi” padahal seharusnya masuk** | Cek `HARI_AKTIF`. Bila tanggal ada di `TANGGAL_LIBUR`, jalankan `diagnosaSistem()` dan lihat `tanggalLiburTerbaca`. |
+| **“Lokasi Anda belum terdeteksi”** | Izin lokasi ditolak atau GPS mati. Aktifkan lokasi pada perangkat, izinkan situs memakai lokasi, lalu tekan **Periksa Ulang Lokasi**. Di URL `/exec`, iframe Apps Script dapat memblokir geolocation; gunakan hosting statis HTTPS (bagian 5). |
+| **“Anda berada sekitar N m dari SMKN 2”** | Di luar `RADIUS_LOKASI`. Mendekat ke lokasi atau perbesar radius di sheet Konfigurasi. Pastikan `LAT_SEKOLAH`/`LON_SEKOLAH` benar (cek lewat `cekKonfigurasiLokasi()`). |
+| **Ingin mematikan cek lokasi** | Set `WAJIB_LOKASI=tidak` pada sheet Konfigurasi, lalu muat ulang halaman. |
 | **“Nama sudah tercatat hari ini”** | Anti-duplikasi. Satu nama hanya boleh sekali per tanggal. |
 | **Foto tersimpan tapi tautan tidak publik** | Kebijakan berbagi Google Workspace membatasi `ANYONE_WITH_LINK`. Absensi tetap tercatat; minta admin domain mengizinkan link sharing, atau buka foto dengan akun yang berhak. |
 | **WA tidak terkirim** | Periksa `LAST_WA_STATUS`. Penyebab umum: token salah, perangkat Fonnte offline, kuota habis, nomor tujuan bukan format `62...`. Uji dengan `sendTestWA()`. |

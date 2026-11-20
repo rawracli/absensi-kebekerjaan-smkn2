@@ -369,6 +369,32 @@ textarea.field{
   color:var(--faint);
 }
 
+/* Status deteksi lokasi (khusus status Hadir) */
+.loc-status{
+  display:flex;
+  gap:9px;
+  align-items:flex-start;
+  margin:0;
+  padding:12px 14px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:#f4f8f7;
+  font-size:13px;
+  line-height:1.5;
+  color:var(--muted);
+}
+.loc-status .loc-dot{
+  width:9px;height:9px;flex:none;margin-top:5px;border-radius:50%;
+  background:currentColor;
+}
+.loc-status.ok{background:#e8f5e9;border-color:#a5d6a7;color:#1b5e20}
+.loc-status.warn{background:#fef3c7;border-color:#f2d38a;color:#7c4a03}
+.loc-status.loading .loc-dot{animation:locPulse 1.1s ease-in-out infinite}
+@keyframes locPulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion: reduce){
+  .loc-status.loading .loc-dot{animation:none}
+}
+
 .status-grid{
   display:grid;
   grid-template-columns:repeat(3,1fr);
@@ -1016,7 +1042,7 @@ textarea.field{
       <!-- Langkah 3: keterangan (Izin / Sakit, serta Hadir telat) -->
       <div class="card" id="keterangan-card" hidden>
         <div class="card-head">
-          <span class="step">3</span>
+          <span class="step" id="step-keterangan">3</span>
           <div>
             <h2 class="card-title" id="keterangan-title">Keterangan / alasan</h2>
             <p class="card-hint" id="keterangan-hint">Wajib diisi untuk status Izin atau Sakit.</p>
@@ -1033,6 +1059,33 @@ textarea.field{
             placeholder="Contoh: Demam sejak semalam dan ada surat dokter."></textarea>
           <p class="hint"><span id="keterangan-count">0</span>/500 karakter</p>
           <p class="err" id="err-keterangan" hidden></p>
+        </div>
+      </div>
+
+      <!-- Langkah: deteksi lokasi (khusus status Hadir) -->
+      <div class="card" id="lokasi-card" hidden>
+        <div class="card-head">
+          <span class="step" id="step-lokasi">3</span>
+          <div>
+            <h2 class="card-title">Lokasi Anda</h2>
+            <p class="card-hint">
+              Absensi Hadir hanya dapat dilakukan di
+              <strong id="lokasi-nama">SMKN 2</strong> dalam radius
+              <span id="lokasi-radius">180</span> meter. Aktifkan GPS/lokasi
+              pada perangkat Anda.
+            </p>
+          </div>
+        </div>
+
+        <div class="mt12">
+          <p class="loc-status loading" id="lokasi-status" role="status" aria-live="polite">
+            <span class="loc-dot" aria-hidden="true"></span>
+            <span id="lokasi-status-text">Mendeteksi lokasi Anda&hellip;</span>
+          </p>
+          <p class="err" id="err-lokasi" hidden></p>
+          <button type="button" class="btn btn-ghost btn-block mt12" id="btn-lokasi">
+            Periksa Ulang Lokasi
+          </button>
         </div>
       </div>
 
@@ -1328,7 +1381,14 @@ textarea.field{
     toastTimer: null,
     listTimer: null,
     listLoading: false,
-    absensiScreen: 'form'
+    absensiScreen: 'form',
+    location: {
+      status: 'idle',   // idle | loading | ok | far | error
+      lat: null,
+      lon: null,
+      accuracy: null,
+      distance: null
+    }
   };
 
   const SCREENS = {
@@ -2212,6 +2272,144 @@ textarea.field{
     hideError('err-nama');
     hideError('err-keterangan');
     hideError('err-foto');
+    hideError('err-lokasi');
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /*  LOKASI (khusus status Hadir)                                          */
+  /* ---------------------------------------------------------------------- */
+
+  function locationConfig() {
+    const loc = state.data && state.data.location;
+    if (!loc || loc.enabled !== true) return null;
+    if (!isFinite(Number(loc.lat)) || !isFinite(Number(loc.lon))) return null;
+    return loc;
+  }
+
+  function distanceMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const toRad = function (deg) { return (Number(deg) * Math.PI) / 180; };
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  }
+
+  function setLocationStatus(kind, text) {
+    const el = $('lokasi-status');
+    const txt = $('lokasi-status-text');
+    if (!el || !txt) return;
+    let cls = 'loc-status';
+    if (kind === 'ok') cls += ' ok';
+    else if (kind === 'far' || kind === 'error') cls += ' warn';
+    else if (kind === 'loading') cls += ' loading';
+    el.className = cls;
+    txt.textContent = text;
+  }
+
+  function resetLocationState() {
+    state.location = {
+      status: 'idle', lat: null, lon: null, accuracy: null, distance: null
+    };
+    hideError('err-lokasi');
+  }
+
+  function setLocationVisibility() {
+    const status = currentStatus();
+    const loc = locationConfig();
+    const visible = status === 'Hadir' && !!loc;
+
+    $('lokasi-card').hidden = !visible;
+
+    if (visible) {
+      $('lokasi-nama').textContent = loc.nama;
+      $('lokasi-radius').textContent = String(Math.round(loc.radius));
+      if (state.location.status === 'idle') detectLocation();
+    } else {
+      resetLocationState();
+    }
+
+    renumberSteps();
+  }
+
+  function renumberSteps() {
+    let n = 2; // 1 = nama, 2 = status
+    if (!$('keterangan-card').hidden) {
+      $('step-keterangan').textContent = String(++n);
+    }
+    if (!$('lokasi-card').hidden) {
+      $('step-lokasi').textContent = String(++n);
+    }
+    $('step-photo').textContent = String(++n);
+  }
+
+  function detectLocation() {
+    const loc = locationConfig();
+    if (!loc) return;
+
+    if (!navigator.geolocation) {
+      state.location.status = 'error';
+      setLocationStatus('error',
+        'Perangkat atau browser ini tidak mendukung deteksi lokasi. ' +
+        'Gunakan Chrome/Safari terbaru lalu coba lagi.');
+      return;
+    }
+
+    state.location = {
+      status: 'loading', lat: null, lon: null, accuracy: null, distance: null
+    };
+    hideError('err-lokasi');
+    setLocationStatus('loading', 'Mendeteksi lokasi Anda…');
+
+    navigator.geolocation.getCurrentPosition(
+      function (pos) { applyLocationPosition(pos, loc); },
+      function (err) {
+        if (currentStatus() !== 'Hadir') return;
+        let pesan = 'Gagal mendeteksi lokasi. ';
+        if (err && err.code === 1) {
+          pesan += 'Izinkan akses lokasi pada browser, lalu tekan "Periksa Ulang Lokasi".';
+        } else if (err && err.code === 3) {
+          pesan += 'Waktu deteksi habis. Coba lagi di area terbuka dengan GPS aktif.';
+        } else {
+          pesan += 'Pastikan GPS aktif dan koneksi internet stabil, lalu coba lagi.';
+        }
+        state.location.status = 'error';
+        setLocationStatus('error', pesan);
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 }
+    );
+  }
+
+  function applyLocationPosition(pos, loc) {
+    if (currentStatus() !== 'Hadir') return;
+
+    const lat = Number(pos.coords.latitude);
+    const lon = Number(pos.coords.longitude);
+    const accuracy = Math.round(Number(pos.coords.accuracy) || 0);
+    const distance = distanceMeters(lat, lon, Number(loc.lat), Number(loc.lon));
+    const radius = Math.round(loc.radius);
+
+    state.location = {
+      status: distance <= loc.radius ? 'ok' : 'far',
+      lat: lat,
+      lon: lon,
+      accuracy: accuracy,
+      distance: distance
+    };
+
+    if (distance <= loc.radius) {
+      setLocationStatus('ok',
+        'Lokasi terverifikasi: sekitar ' + distance + ' m dari ' + loc.nama +
+        ' (batas ' + radius + ' m).' +
+        (accuracy ? ' Akurasi GPS ±' + accuracy + ' m.' : ''));
+    } else {
+      setLocationStatus('far',
+        'Anda berada sekitar ' + distance + ' m dari ' + loc.nama +
+        '. Maksimal ' + radius + ' m — silakan mendekat lalu tekan "Periksa Ulang Lokasi".');
+    }
   }
 
   function setKeteranganVisibility() {
@@ -2221,7 +2419,6 @@ textarea.field{
 
     $('keterangan-card').hidden = !required;
     $('keterangan').required = required;
-    $('step-photo').textContent = required ? '4' : '3';
 
     if (lateHadir) {
       const onTimeLabelText = (state.data && state.data.onTime && state.data.onTime.label) ? state.data.onTime.label : '—';
@@ -2235,6 +2432,8 @@ textarea.field{
     }
 
     if (!required) hideError('err-keterangan');
+
+    setLocationVisibility();
   }
 
   function resetForm() {
@@ -2282,6 +2481,22 @@ textarea.field{
       problems.push('keterangan');
     }
 
+    const loc = locationConfig();
+    if (status === 'Hadir' && loc) {
+      if (state.location.status === 'idle' || state.location.status === 'loading') {
+        showFieldError('err-lokasi', 'Lokasi masih dideteksi. Tunggu sebentar lalu kirim lagi.');
+        problems.push('lokasi');
+        detectLocation();
+      } else if (state.location.status === 'error') {
+        showFieldError('err-lokasi', 'Lokasi belum terdeteksi. Tekan "Periksa Ulang Lokasi".');
+        problems.push('lokasi');
+      } else if (state.location.status === 'far') {
+        showFieldError('err-lokasi',
+          'Anda berada di luar radius ' + Math.round(loc.radius) + ' m dari ' + loc.nama + '.');
+        problems.push('lokasi');
+      }
+    }
+
     if (!state.photoBase64) {
       showFieldError('err-foto', 'Foto wajib diambil dari kamera sebelum mengirim absensi.');
       problems.push('foto');
@@ -2292,6 +2507,7 @@ textarea.field{
 
       if (problems[0] === 'foto') target = document.querySelector('.viewfinder');
       else if (problems[0] === 'keterangan') target = $('keterangan');
+      else if (problems[0] === 'lokasi') target = $('lokasi-card');
       else if (problems[0] === 'nama') target = $('nama');
 
       if (target && target.scrollIntoView) {
@@ -2341,13 +2557,20 @@ textarea.field{
     $('submit-overlay').classList.add('open');
 
     const status = currentStatus();
+    const loc = locationConfig();
+    const kirimLokasi = status === 'Hadir' && !!loc &&
+      state.location.status === 'ok' &&
+      state.location.lat != null && state.location.lon != null;
 
     try {
       const result = await API.submit({
         nama: $('nama').value,
         status: status,
         keterangan: needsKeterangan(status) ? $('keterangan').value.trim() : '',
-        fotoBase64: state.photoBase64
+        fotoBase64: state.photoBase64,
+        latitude: kirimLokasi ? state.location.lat : null,
+        longitude: kirimLokasi ? state.location.lon : null,
+        locationAccuracy: kirimLokasi ? state.location.accuracy : null
       });
 
       if (!result || result.ok !== true) {
@@ -2393,6 +2616,23 @@ textarea.field{
       toast(message, 'warn');
       setScreen('form');
       refreshData();
+      return;
+    }
+
+    if (code === 'LOCATION_REQUIRED') {
+      showFieldError('err-lokasi', message);
+      toast(message, 'warn');
+      setScreen('form');
+      detectLocation();
+      return;
+    }
+
+    if (code === 'LOCATION_OUT_OF_RANGE') {
+      state.location.status = 'far';
+      setLocationStatus('far', message);
+      showFieldError('err-lokasi', message);
+      toast(message, 'warn');
+      setScreen('form');
       return;
     }
 
@@ -2582,9 +2822,16 @@ textarea.field{
           setKeteranganVisibility();
           updatePhotoCopy(currentStatus());
           hideError('err-keterangan');
+          hideError('err-lokasi');
         });
       }
     );
+
+    if ($('btn-lokasi')) {
+      $('btn-lokasi').addEventListener('click', function () {
+        detectLocation();
+      });
+    }
 
     $('keterangan').addEventListener('input', function () {
       $('keterangan-count').textContent = String($('keterangan').value.length);

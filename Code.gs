@@ -71,6 +71,12 @@ const CONFIG = Object.freeze({
   PUBLIC_DAYS: 7,          // halaman publik: hari ini + 6 hari sebelumnya
   LIST_CACHE_SECONDS: 20,
 
+  // Lokasi sekolah untuk validasi status Hadir (bisa diubah di Konfigurasi).
+  DEFAULT_LOCATION_NAME: 'SMKN 2',
+  DEFAULT_LAT: -6.934730751402668,
+  DEFAULT_LON: 106.92613213306163,
+  DEFAULT_RADIUS_M: 180,
+
   STATUS_LIST: ['Hadir', 'Izin', 'Sakit'],
   STATUS_ALL: ['Hadir', 'Izin', 'Sakit', 'Alpha']
 });
@@ -122,6 +128,47 @@ function cfgInt_(cfg, key, fallback) {
   const raw = String((cfg && cfg[key]) == null ? '' : cfg[key]).trim();
   const n = parseInt(raw, 10);
   return isNaN(n) || n < 0 ? fallback : n;
+}
+
+/** Angka konfigurasi desimal (menerima koma Indonesia), fallback bila tidak valid. */
+function cfgNumber_(cfg, key, fallback) {
+  const raw = String((cfg && cfg[key]) == null ? '' : cfg[key]).trim().replace(',', '.');
+  const n = parseFloat(raw);
+  return isFinite(n) ? n : fallback;
+}
+
+/**
+ * Konfigurasi lokasi absensi dari sheet Konfigurasi.
+ * Dipakai untuk menampilkan info di frontend sekaligus validasi server.
+ */
+function locationConfig_(cfg) {
+  const lat = cfgNumber_(cfg, 'LAT_SEKOLAH', CONFIG.DEFAULT_LAT);
+  const lon = cfgNumber_(cfg, 'LON_SEKOLAH', CONFIG.DEFAULT_LON);
+
+  let radius = cfgNumber_(cfg, 'RADIUS_LOKASI', CONFIG.DEFAULT_RADIUS_M);
+  if (!(radius > 0)) radius = CONFIG.DEFAULT_RADIUS_M;
+
+  const nama = String((cfg && cfg.NAMA_LOKASI) == null ? '' : cfg.NAMA_LOKASI).trim() ||
+    CONFIG.DEFAULT_LOCATION_NAME;
+
+  const wajibRaw = String((cfg && cfg.WAJIB_LOKASI) == null ? '' : cfg.WAJIB_LOKASI).trim();
+  const enabled = wajibRaw ? isEnabled_(wajibRaw) : true;
+
+  return { nama: nama, lat: lat, lon: lon, radius: radius, enabled: enabled };
+}
+
+/** Jarak dua koordinat (meter) memakai formula haversine. */
+function distanceMeters_(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = function (deg) { return (Number(deg) * Math.PI) / 180; };
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return Math.round(R * c);
 }
 
 /** Ambil jam (0-23) dari label "HH:MM" dalam cfg, fallback ke CONFIG.CUTOFF_HOUR. */
@@ -579,6 +626,11 @@ function configDefaults_() {
     CACHE_DAFTAR_DETIK: String(CONFIG.LIST_CACHE_SECONDS),
     JAM_TUTUP: '10:00',          // batas akhir pengisian (HH:MM WIB)
     JAM_TEPAT_WAKTU: '08:00',   // batas tepat waktu (HH:MM WIB)
+    NAMA_LOKASI: 'SMKN 2',      // nama lokasi yang ditampilkan ke peserta
+    LAT_SEKOLAH: '-6.934730751402668',
+    LON_SEKOLAH: '106.92613213306163',
+    RADIUS_LOKASI: '180',       // radius toleransi absensi Hadir (meter)
+    WAJIB_LOKASI: 'ya',         // ya = status Hadir wajib di dalam radius
     MODE_UJI: 'tidak',
     HARI_AKTIF: CONFIG.DEFAULT_ACTIVE_DAYS,
     TANGGAL_LIBUR: '',
@@ -1222,6 +1274,7 @@ function getBootstrapData() {
         activeDaysLabel: activeDaysLabel_(cfg),
         cutoff: { label: cutoffLabel_(cfg), epochMs: wib.cutoffEpochMs },
         onTime: { label: onTimeLabel_(cfg) },
+        location: locationConfig_(cfg),
         isClosed: !!closedReason,
         closedReason: closedReason,
         normalClosedReason: normalClosedReason,
@@ -1537,6 +1590,46 @@ function submitAttendance(payload) {
       }
     }
 
+    /*
+     * Validasi lokasi hanya untuk status Hadir. Izin/Sakit tetap dapat
+     * dikirim dari mana saja karena merupakan keterangan ketidakhadiran.
+     */
+    const lokasi = locationConfig_(cfgAwal);
+    let jarakLokasi = null;
+
+    if (status === 'Hadir' && lokasi.enabled) {
+      const latRaw = payload.latitude;
+      const lonRaw = payload.longitude;
+
+      if (latRaw == null || lonRaw == null || latRaw === '' || lonRaw === '') {
+        throw new AppError(
+          'LOCATION_REQUIRED',
+          'Lokasi Anda belum terdeteksi. Aktifkan GPS dan izinkan akses lokasi, lalu coba lagi.'
+        );
+      }
+
+      const lat = Number(latRaw);
+      const lon = Number(lonRaw);
+
+      if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+        throw new AppError(
+          'LOCATION_REQUIRED',
+          'Koordinat lokasi tidak valid. Muat ulang halaman lalu coba lagi.'
+        );
+      }
+
+      jarakLokasi = distanceMeters_(lat, lon, lokasi.lat, lokasi.lon);
+
+      if (jarakLokasi > lokasi.radius) {
+        throw new AppError(
+          'LOCATION_OUT_OF_RANGE',
+          'Anda berada sekitar ' + jarakLokasi + ' m dari ' + lokasi.nama +
+          '. Absensi Hadir hanya dapat dilakukan dalam radius ' +
+          Math.round(lokasi.radius) + ' m.'
+        );
+      }
+    }
+
     const photoBytes = decodeAndValidatePhoto_(payload.fotoBase64);
 
     /* ---------------------------- 2. Ambil lock --------------------------- */
@@ -1689,6 +1782,8 @@ function submitAttendance(payload) {
         jam: Utilities.formatDate(timestamp, CONFIG.TIMEZONE, 'HH:mm:ss'),
         timestampFormatted: formattedTimestamp,
         terlambatMenit: terlambat,
+        jarakLokasiMeter: jarakLokasi,
+        namaLokasi: lokasi.nama,
         isTerlambat: status === 'Hadir' && terlambat > 0,
         keterangan: keteranganFinal,
         fotoUrl: photoUrl,
@@ -2925,6 +3020,40 @@ function aturTriggerHarian() {
   Logger.log('Trigger harian: ' + (result.changed ? 'diperbarui' : 'sudah cocok') +
     ' ke ' + pad2_(result.hour) + ':' + pad2_(result.minute) + ' WIB.');
   return result;
+}
+
+/**
+ * DIAGNOSTIK: tampilkan konfigurasi lokasi absensi yang terbaca server.
+ * Jalankan dari editor Apps Script bila validasi lokasi tidak sesuai.
+ */
+function cekKonfigurasiLokasi() {
+  const lines = [];
+  try {
+    const ss = getSpreadsheet_();
+    lines.push('Spreadsheet    : ' + ss.getName());
+    lines.push('URL            : ' + ss.getUrl());
+
+    const cfg = getConfigMap_();
+    const loc = locationConfig_(cfg);
+
+    lines.push('NAMA_LOKASI    : "' + loc.nama + '"');
+    lines.push('LAT_SEKOLAH    : ' + loc.lat);
+    lines.push('LON_SEKOLAH    : ' + loc.lon);
+    lines.push('RADIUS_LOKASI  : ' + loc.radius + ' m');
+    lines.push('WAJIB_LOKASI   : ' + (loc.enabled ? 'ya (Hadir divalidasi)' : 'tidak (nonaktif)'));
+    lines.push('');
+    lines.push('Uji jarak dari pusat:');
+    [0.0005, 0.001, 0.0016, 0.002].forEach(function (delta) {
+      lines.push('  +' + delta + '° lintang = ' +
+        distanceMeters_(loc.lat + delta, loc.lon, loc.lat, loc.lon) + ' m');
+    });
+  } catch (err) {
+    lines.push('ERROR: ' + (err && err.message ? err.message : err));
+  }
+
+  const text = lines.join('\n');
+  Logger.log(text);
+  return text;
 }
 
 /**
