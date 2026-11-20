@@ -121,6 +121,20 @@ function cfgInt_(cfg, key, fallback) {
   return isNaN(n) || n < 0 ? fallback : n;
 }
 
+/** Ambil jam (0-23) dari label "HH:MM" dalam cfg, fallback ke CONFIG.CUTOFF_HOUR. */
+function triggerHour_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
+  if (secs > 0) return Math.floor(secs / 3600);
+  return CONFIG.CUTOFF_HOUR;
+}
+
+/** Ambil menit (0-59) dari label "HH:MM" dalam cfg. */
+function triggerMinute_(cfg) {
+  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
+  if (secs > 0) return Math.floor((secs % 3600) / 60);
+  return 0;
+}
+
 const HARI_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 const BULAN_ID = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
