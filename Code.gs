@@ -79,7 +79,10 @@ const SECONDS_PER_MINUTE = 60;
 
 /** Parse "HH:MM" (00-23:00-59) -> detik sejak tengah malam; 0 bila tidak valid. */
 function timeToSeconds_(label) {
-  const m = String(label || '').trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  // Terima "9:30", "09:30", "9.30", dan "09:30:00" agar sel Sheets yang
+  // otomatis berformat waktu tetap terbaca.
+  const m = String(label || '').trim()
+    .match(/^([01]?\d|2[0-3])[:.]([0-5]\d)(?:[:.][0-5]\d)?$/);
   if (!m) return 0;
   return Number(m[1]) * 3600 + Number(m[2]) * 60;
 }
@@ -587,6 +590,38 @@ function configDefaults_() {
 }
 
 /** Baca seluruh isi sheet Konfigurasi menjadi objek key-value. */
+/**
+ * Ubah nilai sel Konfigurasi menjadi teks yang aman dipakai logika.
+ *
+ * Sheets kadang mengubah ketikan pengguna menjadi tipe lain:
+ *   - "09:30"  -> Date (1899-12-30 09:30) sehingga String() jadi teks panjang
+ *   - "09:30"  -> Number 0.3958 (pecahan hari)
+ * Keduanya dinormalisasi kembali menjadi "HH:MM".
+ */
+function configCellToString_(value) {
+  if (value == null) return '';
+
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    if (isNaN(value.getTime())) return '';
+    const tahun = Number(Utilities.formatDate(value, CONFIG.TIMEZONE, 'yyyy'));
+    // Nilai jam saja di Sheets memakai tanggal dasar 1899-12-30.
+    if (tahun < 1900) {
+      return Utilities.formatDate(value, CONFIG.TIMEZONE, 'HH:mm');
+    }
+    return Utilities.formatDate(value, CONFIG.TIMEZONE, 'yyyy-MM-dd');
+  }
+
+  if (typeof value === 'number') {
+    if (value >= 0 && value < 1) {
+      const totalMenit = Math.round(value * 1440) % 1440;
+      return pad2_(Math.floor(totalMenit / 60)) + ':' + pad2_(totalMenit % 60);
+    }
+    return String(value);
+  }
+
+  return String(value).trim();
+}
+
 function getConfigMap_() {
   const sheet = getSheet_(CONFIG.SHEET_CONFIG);
   const lastRow = sheet.getLastRow();
@@ -596,8 +631,8 @@ function getConfigMap_() {
 
   const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
   values.forEach(function (row) {
-    const key = String(row[0] == null ? '' : row[0]).trim();
-    if (key) map[key] = String(row[1] == null ? '' : row[1]).trim();
+    const key = String(row[0] == null ? '' : row[0]).trim().toUpperCase();
+    if (key) map[key] = configCellToString_(row[1]);
   });
 
   return map;
@@ -2890,6 +2925,54 @@ function aturTriggerHarian() {
   Logger.log('Trigger harian: ' + (result.changed ? 'diperbarui' : 'sudah cocok') +
     ' ke ' + pad2_(result.hour) + ':' + pad2_(result.minute) + ' WIB.');
   return result;
+}
+
+/**
+ * DIAGNOSTIK: jalankan dari editor Apps Script bila jam trigger tidak sesuai.
+ * Menampilkan spreadsheet yang benar-benar dipakai, tipe & nilai mentah sel
+ * JAM_TUTUP / JAM_TEPAT_WAKTU, nilai hasil parsing, dan jadwal trigger.
+ */
+function cekKonfigurasiJam() {
+  const lines = [];
+
+  try {
+    const ss = getSpreadsheet_();
+    lines.push('Spreadsheet : ' + ss.getName());
+    lines.push('URL         : ' + ss.getUrl());
+    lines.push('ID          : ' + ss.getId());
+
+    const sheet = ss.getSheetByName(CONFIG.SHEET_CONFIG);
+    if (!sheet) {
+      lines.push('Sheet Konfigurasi TIDAK ditemukan di spreadsheet ini.');
+    } else {
+      const lastRow = sheet.getLastRow();
+      if (lastRow >= 2) {
+        const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+        values.forEach(function (row) {
+          const key = String(row[0] == null ? '' : row[0]).trim().toUpperCase();
+          if (key === 'JAM_TUTUP' || key === 'JAM_TEPAT_WAKTU') {
+            lines.push(key + ' mentah : ' + Object.prototype.toString.call(row[1]) +
+              ' = ' + String(row[1]));
+            lines.push(key + ' bersih : "' + configCellToString_(row[1]) + '"');
+          }
+        });
+      }
+    }
+
+    const cfg = getConfigMap_();
+    lines.push('JAM_TUTUP terbaca     : "' + (cfg.JAM_TUTUP || '') + '"');
+    lines.push('JAM_TEPAT_WAKTU       : "' + (cfg.JAM_TEPAT_WAKTU || '') + '"');
+    lines.push('Trigger seharusnya    : ' + pad2_(triggerHour_(cfg)) + ':' +
+      pad2_(triggerMinute_(cfg)) + ' WIB');
+    lines.push('Trigger tercatat      : "' + recordedTriggerLabel_() + '"');
+    lines.push('Jumlah trigger harian : ' + closingTriggerCount_());
+  } catch (err) {
+    lines.push('ERROR: ' + (err && err.message ? err.message : err));
+  }
+
+  const text = lines.join('\n');
+  Logger.log(text);
+  return text;
 }
 
 /**
