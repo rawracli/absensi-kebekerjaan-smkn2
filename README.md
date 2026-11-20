@@ -125,6 +125,14 @@ Buka sheet **`Konfigurasi`** dan isi `Value`:
 | `TANGGAL_LIBUR` | `2026-12-25,2027-01-01` | Opsional, lihat format di bawah |
 | `MIGRASI_V2` | `selesai` | Penanda migrasi internal, jangan diubah manual |
 
+> **Penting untuk `LAT_SEKOLAH` / `LON_SEKOLAH`:** sel ini disimpan sebagai
+> **teks** (format `@`). Bila terlanjur berubah menjadi angka dengan pemisah
+> ribuan (mis. `-6.934.730.751.402.660`), jalankan fungsi
+> **`perbaikiKonfigurasiLokasi()`** dari editor Apps Script. Fungsi itu
+> mengembalikan format teks dan mengganti nilai yang tidak valid dengan
+> koordinat bawaan. Aplikasi juga otomatis merapikannya saat setup/permintaan
+> berikutnya.
+
 > Saat kode versi baru pertama kali berjalan pada spreadsheet lama, `MIGRASI_V2`
 menyetel kanal rekap sekali saja menjadi `KIRIM_XLSX=ya`, `KIRIM_TEKS_REKAP=tidak`,
 `KIRIM_FOTO_WA=tidak`, `TARGET_WA=nomor`. Nilai yang Anda ubah setelah itu tidak

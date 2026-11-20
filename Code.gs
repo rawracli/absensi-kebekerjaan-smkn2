@@ -76,6 +76,7 @@ const CONFIG = Object.freeze({
   DEFAULT_LAT: -6.934730751402668,
   DEFAULT_LON: 106.92613213306163,
   DEFAULT_RADIUS_M: 180,
+  MAX_RADIUS_M: 10000,
 
   STATUS_LIST: ['Hadir', 'Izin', 'Sakit'],
   STATUS_ALL: ['Hadir', 'Izin', 'Sakit', 'Alpha']
@@ -137,16 +138,33 @@ function cfgNumber_(cfg, key, fallback) {
   return isFinite(n) ? n : fallback;
 }
 
+/** Latitude valid: angka berhingga di antara -90 dan 90. */
+function isValidLat_(value) {
+  const n = Number(value);
+  return isFinite(n) && n >= -90 && n <= 90;
+}
+
+/** Longitude valid: angka berhingga di antara -180 dan 180. */
+function isValidLon_(value) {
+  const n = Number(value);
+  return isFinite(n) && n >= -180 && n <= 180;
+}
+
 /**
  * Konfigurasi lokasi absensi dari sheet Konfigurasi.
  * Dipakai untuk menampilkan info di frontend sekaligus validasi server.
  */
 function locationConfig_(cfg) {
-  const lat = cfgNumber_(cfg, 'LAT_SEKOLAH', CONFIG.DEFAULT_LAT);
-  const lon = cfgNumber_(cfg, 'LON_SEKOLAH', CONFIG.DEFAULT_LON);
+  let lat = cfgNumber_(cfg, 'LAT_SEKOLAH', CONFIG.DEFAULT_LAT);
+  let lon = cfgNumber_(cfg, 'LON_SEKOLAH', CONFIG.DEFAULT_LON);
+
+  // Pengaman: sel yang terlanjur diformat sebagai angka bisa berisi nilai
+  // raksasa (mis. -6934730751402660). Nilai di luar rentang valid diabaikan.
+  if (!isValidLat_(lat)) lat = CONFIG.DEFAULT_LAT;
+  if (!isValidLon_(lon)) lon = CONFIG.DEFAULT_LON;
 
   let radius = cfgNumber_(cfg, 'RADIUS_LOKASI', CONFIG.DEFAULT_RADIUS_M);
-  if (!(radius > 0)) radius = CONFIG.DEFAULT_RADIUS_M;
+  if (!(radius > 0) || radius > CONFIG.MAX_RADIUS_M) radius = CONFIG.DEFAULT_RADIUS_M;
 
   const nama = String((cfg && cfg.NAMA_LOKASI) == null ? '' : cfg.NAMA_LOKASI).trim() ||
     CONFIG.DEFAULT_LOCATION_NAME;
@@ -650,7 +668,7 @@ function configDefaults_() {
  *   - "09:30"  -> Number 0.3958 (pecahan hari)
  * Keduanya dinormalisasi kembali menjadi "HH:MM".
  */
-function configCellToString_(value) {
+function configCellToString_(value, key) {
   if (value == null) return '';
 
   if (Object.prototype.toString.call(value) === '[object Date]') {
@@ -664,7 +682,10 @@ function configCellToString_(value) {
   }
 
   if (typeof value === 'number') {
-    if (value >= 0 && value < 1) {
+    // Hanya key jam yang boleh berupa pecahan hari (0.3958 = 09:30).
+    const keyAtas = String(key || '').trim().toUpperCase();
+    if ((keyAtas === 'JAM_TUTUP' || keyAtas === 'JAM_TEPAT_WAKTU') &&
+        value >= 0 && value < 1) {
       const totalMenit = Math.round(value * 1440) % 1440;
       return pad2_(Math.floor(totalMenit / 60)) + ':' + pad2_(totalMenit % 60);
     }
@@ -684,13 +705,94 @@ function getConfigMap_() {
   const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
   values.forEach(function (row) {
     const key = String(row[0] == null ? '' : row[0]).trim().toUpperCase();
-    if (key) map[key] = configCellToString_(row[1]);
+    if (key) map[key] = configCellToString_(row[1], key);
   });
 
   return map;
 }
 
 /** Tambahkan key yang belum ada tanpa menimpa nilai yang sudah diisi. */
+/** Key konfigurasi yang nilainya wajib disimpan sebagai teks (format `@`). */
+const CONFIG_TEXT_KEYS = [
+  'NAMA_LOKASI',
+  'LAT_SEKOLAH',
+  'LON_SEKOLAH',
+  'RADIUS_LOKASI',
+  'JAM_TUTUP',
+  'JAM_TEPAT_WAKTU',
+  'TANGGAL_LIBUR'
+];
+
+/** Tulis baris konfigurasi baru dengan format teks agar tidak dikonversi Sheets. */
+function appendConfigRow_(sheet, key, value) {
+  const row = sheet.getLastRow() + 1;
+  const range = sheet.getRange(row, 1, 1, 2);
+  range.setNumberFormat('@');
+  range.setValues([[key, String(value)]]);
+  return row;
+}
+
+/**
+ * Pastikan sel konfigurasi tertentu berformat teks dan nilainya wajar.
+ *
+ * Sheets dapat mengubah "-6.934730751402668" menjadi angka dan menampilkannya
+ * dengan pemisah ribuan ("-6.934.730.751.402.660"). Fungsi ini mengembalikan
+ * sel tersebut ke format teks dan, bila nilainya sudah rusak/tidak valid,
+ * memakai nilai bawaan.
+ *
+ * @return {number} jumlah sel yang diperbaiki
+ */
+function normalizeConfigSheet_(sheet) {
+  const target = sheet || getSheet_(CONFIG.SHEET_CONFIG);
+  const lastRow = target.getLastRow();
+  if (lastRow < 2) return 0;
+
+  const range = target.getRange(2, 1, lastRow - 1, 2);
+  const values = range.getValues();
+  const formats = range.getNumberFormats();
+  const defaults = configDefaults_();
+  const fixes = [];
+
+  values.forEach(function (row, index) {
+    const key = String(row[0] == null ? '' : row[0]).trim().toUpperCase();
+    if (CONFIG_TEXT_KEYS.indexOf(key) === -1) return;
+
+    const raw = row[1];
+    let text = configCellToString_(raw, key);
+
+    if (key === 'LAT_SEKOLAH') {
+      if (!isValidLat_(parseFloat(String(text).replace(',', '.')))) {
+        text = defaults.LAT_SEKOLAH;
+      }
+    } else if (key === 'LON_SEKOLAH') {
+      if (!isValidLon_(parseFloat(String(text).replace(',', '.')))) {
+        text = defaults.LON_SEKOLAH;
+      }
+    } else if (key === 'RADIUS_LOKASI') {
+      const radius = parseFloat(String(text).replace(',', '.'));
+      if (!(radius > 0) || radius > CONFIG.MAX_RADIUS_M) {
+        text = defaults.RADIUS_LOKASI;
+      }
+    }
+
+    const format = String(formats[index][1] == null ? '' : formats[index][1]);
+    const perluFormat = format !== '@';
+    const perluNilai = typeof raw !== 'string' || String(raw).trim() !== text;
+
+    if (perluFormat || perluNilai) {
+      fixes.push({ row: index + 2, text: text, perluNilai: perluNilai });
+    }
+  });
+
+  fixes.forEach(function (fix) {
+    const cell = target.getRange(fix.row, 2);
+    cell.setNumberFormat('@');
+    if (fix.perluNilai) cell.setValue(fix.text);
+  });
+
+  return fixes.length;
+}
+
 function ensureConfigDefaults_() {
   const sheet = getSheet_(CONFIG.SHEET_CONFIG);
   const map = getConfigMap_();
@@ -698,7 +800,7 @@ function ensureConfigDefaults_() {
 
   Object.keys(defaults).forEach(function (key) {
     if (!Object.prototype.hasOwnProperty.call(map, key)) {
-      sheet.appendRow([key, defaults[key]]);
+      appendConfigRow_(sheet, key, defaults[key]);
       map[key] = defaults[key];
     }
   });
@@ -719,7 +821,10 @@ function ensureConfigDefaults_() {
     Logger.log('Migrasi v2 diterapkan: rekap harian berupa satu file XLSX.');
   }
 
-  return map;
+  // Rapikan sel yang terlanjur dikonversi Sheets (mis. koordinat sekolah).
+  try { normalizeConfigSheet_(sheet); } catch (errRapi) { /* jangan gagalkan setup */ }
+
+  return getConfigMap_();
 }
 
 /** Simpan/perbarui beberapa key sekaligus. */
@@ -741,10 +846,11 @@ function setConfigValues_(values) {
   Object.keys(values).forEach(function (key) {
     const value = values[key] == null ? '' : String(values[key]);
     if (rowByKey[key]) {
-      sheet.getRange(rowByKey[key], 2).setValue(value);
+      const cell = sheet.getRange(rowByKey[key], 2);
+      cell.setNumberFormat('@');
+      cell.setValue(value);
     } else {
-      sheet.appendRow([key, value]);
-      rowByKey[key] = sheet.getLastRow();
+      rowByKey[key] = appendConfigRow_(sheet, key, value);
     }
   });
 }
@@ -3023,6 +3129,30 @@ function aturTriggerHarian() {
 }
 
 /**
+ * PERBAIKAN: kembalikan sel konfigurasi (koordinat, jam, radius, tanggal
+ * libur) ke format teks dan ganti nilai yang tidak valid dengan bawaan.
+ * Jalankan sekali dari editor Apps Script setelah memperbarui kode.
+ */
+function perbaikiKonfigurasiLokasi() {
+  const sheet = getSheet_(CONFIG.SHEET_CONFIG);
+  const fixed = normalizeConfigSheet_(sheet);
+  SpreadsheetApp.flush();
+
+  const loc = locationConfig_(getConfigMap_());
+  const lines = [
+    fixed + ' sel konfigurasi dirapikan (format teks).',
+    'NAMA_LOKASI   : ' + loc.nama,
+    'LAT_SEKOLAH   : ' + loc.lat,
+    'LON_SEKOLAH   : ' + loc.lon,
+    'RADIUS_LOKASI : ' + loc.radius + ' m',
+    'WAJIB_LOKASI  : ' + (loc.enabled ? 'ya' : 'tidak')
+  ];
+  const text = lines.join('\n');
+  Logger.log(text);
+  return text;
+}
+
+/**
  * DIAGNOSTIK: tampilkan konfigurasi lokasi absensi yang terbaca server.
  * Jalankan dari editor Apps Script bila validasi lokasi tidak sesuai.
  */
@@ -3082,7 +3212,7 @@ function cekKonfigurasiJam() {
           if (key === 'JAM_TUTUP' || key === 'JAM_TEPAT_WAKTU') {
             lines.push(key + ' mentah : ' + Object.prototype.toString.call(row[1]) +
               ' = ' + String(row[1]));
-            lines.push(key + ' bersih : "' + configCellToString_(row[1]) + '"');
+            lines.push(key + ' bersih : "' + configCellToString_(row[1], key) + '"');
           }
         });
       }
