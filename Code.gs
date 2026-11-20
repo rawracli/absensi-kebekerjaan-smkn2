@@ -2828,6 +2828,34 @@ function formatSheets_(sheets) {
   config.getRange(2, 2, Math.max(config.getMaxRows() - 1, 1), 1).setWrap(true);
 }
 
+/**
+ * Kunci Script Property yang menyimpan jadwal trigger harian terakhir
+ * dipasang (format "HH:MM"). Apps Script tidak menyediakan getHour()/getMinute()
+ * pada objek Trigger, sehingga jadwal aktual perlu dicatat sendiri.
+ */
+const TRIGGER_PROP_KEY = 'TRIGGER_HARIAN_HH_MM';
+
+/** Label "HH:MM" dari JAM_TUTUP pada cfg. */
+function triggerLabel_(cfg) {
+  return pad2_(triggerHour_(cfg)) + ':' + pad2_(triggerMinute_(cfg));
+}
+
+/** Jadwal trigger terakhir yang tercatat, atau '' bila belum pernah dipasang. */
+function recordedTriggerLabel_() {
+  try {
+    return String(PropertiesService.getScriptProperties().getProperty(TRIGGER_PROP_KEY) || '');
+  } catch (err) {
+    return '';
+  }
+}
+
+/** Jumlah trigger aktif untuk processDailyClosingAndSendWA. */
+function closingTriggerCount_() {
+  return ScriptApp.getProjectTriggers().filter(function (t) {
+    return t.getHandlerFunction() === 'processDailyClosingAndSendWA';
+  }).length;
+}
+
 /** Hapus trigger lama untuk fungsi ini, lalu pasang trigger harian sesuai JAM_TUTUP. */
 function installDailyTrigger_(cfg) {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
@@ -2843,6 +2871,12 @@ function installDailyTrigger_(cfg) {
     .everyDays(1)
     .inTimezone(CONFIG.TIMEZONE)
     .create();
+
+  try {
+    PropertiesService.getScriptProperties().setProperty(TRIGGER_PROP_KEY, triggerLabel_(cfg));
+  } catch (err) {
+    // Pencatatan jadwal bersifat opsional; trigger tetap sudah terpasang.
+  }
 }
 
 /**
@@ -2868,14 +2902,12 @@ function ensureDailyTrigger_() {
     const cfg = getConfigMap_();
     const wantHour = triggerHour_(cfg);
     const wantMinute = triggerMinute_(cfg);
+    const wantLabel = triggerLabel_(cfg);
 
-    const triggers = ScriptApp.getProjectTriggers();
-    for (let i = 0; i < triggers.length; i++) {
-      const t = triggers[i];
-      if (t.getHandlerFunction() !== 'processDailyClosingAndSendWA') continue;
-      if (t.getHour() === wantHour && t.getMinute() === wantMinute) {
-        return { ok: true, changed: false, hour: wantHour, minute: wantMinute };
-      }
+    // Trigger dianggap cocok bila jumlahnya tepat satu dan jadwal tercatat
+    // sama dengan JAM_TUTUP saat ini.
+    if (closingTriggerCount_() === 1 && recordedTriggerLabel_() === wantLabel) {
+      return { ok: true, changed: false, hour: wantHour, minute: wantMinute };
     }
 
     installDailyTrigger_(cfg);
