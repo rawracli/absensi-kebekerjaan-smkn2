@@ -1041,8 +1041,8 @@ textarea.field{
         <div class="card-head">
           <span class="step" id="step-photo">4</span>
           <div>
-            <h2 class="card-title" id="keterangan-title">Foto kehadiran</h2>
-            <p class="card-hint" id="keterangan-hint">Diambil langsung dari kamera, bukan dari galeri.</p>
+            <h2 class="card-title" id="photo-title">Foto kehadiran</h2>
+            <p class="card-hint" id="photo-hint">Diambil langsung dari kamera, bukan dari galeri.</p>
           </div>
         </div>
 
@@ -1454,8 +1454,8 @@ textarea.field{
 
   /** Update judul dan hint foto berdasarkan status saat ini. */
   function updatePhotoCopy(status) {
-    const titleEl = document.getElementById('keterangan-title');
-    const hintEl = document.getElementById('keterangan-hint');
+    const titleEl = document.getElementById('photo-title');
+    const hintEl = document.getElementById('photo-hint');
     const statusLower = status.toLowerCase();
 
     if (statusLower === 'hadir') {
