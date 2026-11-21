@@ -94,34 +94,17 @@ function timeToSeconds_(label) {
   return Number(m[1]) * 3600 + Number(m[2]) * 60;
 }
 
-/** "HH:MM" dari detik sejak tengah malam. */
-function secondsToTimeLabel_(secs) {
-  const total = (((Number(secs) || 0) % 86400) + 86400) % 86400;
-  return pad2_(Math.floor(total / 3600)) + ':' + pad2_(Math.floor((total % 3600) / 60));
+/** Detik batas waktu dari konfigurasi; fallback ke jam bawaan CONFIG. */
+function timeCfgSeconds_(cfg, key, fallbackHour) {
+  const secs = timeToSeconds_(cfg && cfg[key]);
+  return secs > 0 ? secs : fallbackHour * 3600;
 }
 
-/** Detik batas akhir pengisian dari konfigurasi (fallback CONFIG.CUTOFF_HOUR). */
-function cutoffSeconds_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
-  return secs > 0 ? secs : CONFIG.CUTOFF_HOUR * 3600;
-}
-
-/** Detik batas tepat waktu dari konfigurasi (fallback CONFIG.ONTIME_HOUR). */
-function onTimeCfgSeconds_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TEPAT_WAKTU);
-  return secs > 0 ? secs : CONFIG.ONTIME_HOUR * 3600;
-}
-
-/** Label "HH:MM" batas akhir, dari konfigurasi atau fallback. */
-function cutoffLabel_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
-  return secs > 0 ? secondsToTimeLabel_(secs) : pad2_(CONFIG.CUTOFF_HOUR) + ':00';
-}
-
-/** Label "HH:MM" batas tepat waktu, dari konfigurasi atau fallback. */
-function onTimeLabel_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TEPAT_WAKTU);
-  return secs > 0 ? secondsToTimeLabel_(secs) : pad2_(CONFIG.ONTIME_HOUR) + ':00';
+/** Label "HH:MM" dari konfigurasi; fallback ke jam bawaan CONFIG. */
+function timeCfgLabel_(cfg, key, fallbackHour) {
+  const secs = timeCfgSeconds_(cfg, key, fallbackHour);
+  return pad2_(Math.floor(secs / 3600) % 24) + ':' +
+    pad2_(Math.floor((secs % 3600) / 60));
 }
 
 /** Angka konfigurasi integer non-negatif (fallback bila kosong/tidak valid). */
@@ -138,16 +121,10 @@ function cfgNumber_(cfg, key, fallback) {
   return isFinite(n) ? n : fallback;
 }
 
-/** Latitude valid: angka berhingga di antara -90 dan 90. */
-function isValidLat_(value) {
+/** Koordinat valid: angka berhingga dalam rentang -limit..limit. */
+function isValidCoordinate_(value, limit) {
   const n = Number(value);
-  return isFinite(n) && n >= -90 && n <= 90;
-}
-
-/** Longitude valid: angka berhingga di antara -180 dan 180. */
-function isValidLon_(value) {
-  const n = Number(value);
-  return isFinite(n) && n >= -180 && n <= 180;
+  return isFinite(n) && n >= -limit && n <= limit;
 }
 
 /**
@@ -160,8 +137,8 @@ function locationConfig_(cfg) {
 
   // Pengaman: sel yang terlanjur diformat sebagai angka bisa berisi nilai
   // raksasa (mis. -6934730751402660). Nilai di luar rentang valid diabaikan.
-  if (!isValidLat_(lat)) lat = CONFIG.DEFAULT_LAT;
-  if (!isValidLon_(lon)) lon = CONFIG.DEFAULT_LON;
+  if (!isValidCoordinate_(lat, 90)) lat = CONFIG.DEFAULT_LAT;
+  if (!isValidCoordinate_(lon, 180)) lon = CONFIG.DEFAULT_LON;
 
   let radius = cfgNumber_(cfg, 'RADIUS_LOKASI', CONFIG.DEFAULT_RADIUS_M);
   if (!(radius > 0) || radius > CONFIG.MAX_RADIUS_M) radius = CONFIG.DEFAULT_RADIUS_M;
@@ -189,18 +166,15 @@ function distanceMeters_(lat1, lon1, lat2, lon2) {
   return Math.round(R * c);
 }
 
-/** Ambil jam (0-23) dari label "HH:MM" dalam cfg, fallback ke CONFIG.CUTOFF_HOUR. */
+/** Jam (0-23) trigger harian dari JAM_TUTUP. */
 function triggerHour_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
-  if (secs > 0) return Math.floor(secs / 3600);
-  return CONFIG.CUTOFF_HOUR;
+  return Math.floor(timeCfgSeconds_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR) / 3600);
 }
 
-/** Ambil menit (0-59) dari label "HH:MM" dalam cfg. */
+/** Menit (0-59) trigger harian dari JAM_TUTUP. */
 function triggerMinute_(cfg) {
-  const secs = timeToSeconds_(cfg && cfg.JAM_TUTUP);
-  if (secs > 0) return Math.floor((secs % 3600) / 60);
-  return 0;
+  const secs = timeCfgSeconds_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR);
+  return Math.floor((secs % 3600) / 60);
 }
 
 const HARI_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -324,7 +298,7 @@ function shiftDateStr_(dateStr, delta) {
  * Dipakai untuk SEMUA keputusan waktu (buka/tutup, keterlambatan, tanggal).
  */
 function nowWib_(cfg) {
-  const cutoffSeconds = cutoffSeconds_(cfg);
+  const cutoffSeconds = timeCfgSeconds_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR);
   const now = new Date();
   const parts = Utilities
     .formatDate(now, CONFIG.TIMEZONE, 'yyyy-MM-dd HH:mm:ss')
@@ -343,6 +317,10 @@ function nowWib_(cfg) {
   const dayStartEpochMs = epochMs - secondsOfDay * 1000;
   const dateStr = year + '-' + pad2_(month) + '-' + pad2_(day);
 
+  // Hari 1..7 (Senin..Minggu), dihitung lewat UTC agar bebas zona waktu script.
+  const jsDay = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  const dayOfWeek = jsDay === 0 ? 7 : jsDay;
+
   return {
     epochMs: epochMs,
     year: year,
@@ -354,20 +332,11 @@ function nowWib_(cfg) {
     secondsOfDay: secondsOfDay,
     dateStr: dateStr,
     timeLabel: pad2_(hour) + ':' + pad2_(minute) + ':' + pad2_(second),
-    dayOfWeek: wibDayOfWeek_(year, month, day),
+    dayOfWeek: dayOfWeek,
     dayStartEpochMs: dayStartEpochMs,
-    cutoffEpochMs: dayStartEpochMs + cutoffSeconds_(cfg) * 1000,
-    isPastCutoff: secondsOfDay >= cutoffSeconds_(cfg)
+    cutoffEpochMs: dayStartEpochMs + cutoffSeconds * 1000,
+    isPastCutoff: secondsOfDay >= cutoffSeconds
   };
-}
-
-/**
- * Nomor hari 1..7 (Senin..Minggu) dari tanggal kalender WIB.
- * Dihitung lewat UTC agar tidak terpengaruh zona waktu script.
- */
-function wibDayOfWeek_(year, month, day) {
-  const jsDay = new Date(Date.UTC(year, month - 1, day)).getUTCDay(); // 0 = Minggu
-  return jsDay === 0 ? 7 : jsDay;
 }
 
 /** "Rabu, 18 November 2026" */
@@ -494,7 +463,7 @@ function resolveActiveDay_(wib, cfg) {
  * hari yang sama. Contoh: 08:00:59 -> 0 menit, 08:01:00 -> 1 menit.
  */
 function calculateLateness_(wib, cfg) {
-  const onTime = onTimeCfgSeconds_(cfg);
+  const onTime = timeCfgSeconds_(cfg, 'JAM_TEPAT_WAKTU', CONFIG.ONTIME_HOUR);
   if (wib.secondsOfDay <= onTime) return 0;
   return Math.floor((wib.secondsOfDay - onTime) / SECONDS_PER_MINUTE);
 }
@@ -761,11 +730,11 @@ function normalizeConfigSheet_(sheet) {
     let text = configCellToString_(raw, key);
 
     if (key === 'LAT_SEKOLAH') {
-      if (!isValidLat_(parseFloat(String(text).replace(',', '.')))) {
+      if (!isValidCoordinate_(parseFloat(String(text).replace(',', '.')), 90)) {
         text = defaults.LAT_SEKOLAH;
       }
     } else if (key === 'LON_SEKOLAH') {
-      if (!isValidLon_(parseFloat(String(text).replace(',', '.')))) {
+      if (!isValidCoordinate_(parseFloat(String(text).replace(',', '.')), 180)) {
         text = defaults.LON_SEKOLAH;
       }
     } else if (key === 'RADIUS_LOKASI') {
@@ -867,33 +836,6 @@ function lihatKonfigurasi() {
   const map = getConfigMap_();
   Logger.log(JSON.stringify(map, null, 2));
   return map;
-}
-
-/**
- * Hapus sisa baris konfigurasi Telegram dari sheet Konfigurasi.
- * Hanya menyentuh tiga key Telegram; konfigurasi lain tidak diubah.
- * Jalankan sekali bila proyek pernah mencoba integrasi Telegram.
- */
-function hapusKonfigurasiTelegram() {
-  const sheet = getSheet_(CONFIG.SHEET_CONFIG);
-  const lastRow = sheet.getLastRow();
-  const keys = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'LAST_TELEGRAM_STATUS'];
-
-  if (lastRow < 2) return { ok: true, removed: 0 };
-
-  const values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-  let removed = 0;
-
-  for (let i = values.length - 1; i >= 0; i--) {
-    const key = String(values[i][0] == null ? '' : values[i][0]).trim();
-    if (keys.indexOf(key) !== -1) {
-      sheet.deleteRow(i + 2);
-      removed++;
-    }
-  }
-
-  Logger.log('Baris konfigurasi Telegram dihapus: ' + removed);
-  return { ok: true, removed: removed };
 }
 
 /**
@@ -1055,23 +997,9 @@ function sanitizeFileName_(value) {
     .slice(0, 60);
 }
 
-/** Folder foto tahun berjalan, dibuat bila belum ada. */
-function getOrCreatePhotoFolder_() {
-  const folderName = CONFIG.FOLDER_PREFIX + ' ' +
-    Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'yyyy');
-
-  const existing = DriveApp.getFoldersByName(folderName);
-  while (existing.hasNext()) {
-    const candidate = existing.next();
-    if (!candidate.isTrashed()) return candidate;
-  }
-
-  return DriveApp.createFolder(folderName);
-}
-
 /**
  * Folder tujuan foto. Memakai FOLDER_DRIVE_ID dari Konfigurasi bila valid;
- * bila tidak, folder dicari/dibuat lalu ID-nya disimpan kembali.
+ * bila tidak, folder tahun berjalan dicari/dibuat lalu ID-nya disimpan.
  */
 function getPhotoFolder_(cfg) {
   const folderId = String((cfg && cfg.FOLDER_DRIVE_ID) || '').trim();
@@ -1085,7 +1013,18 @@ function getPhotoFolder_(cfg) {
     }
   }
 
-  const folder = getOrCreatePhotoFolder_();
+  const folderName = CONFIG.FOLDER_PREFIX + ' ' +
+    Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'yyyy');
+
+  const existing = DriveApp.getFoldersByName(folderName);
+  let folder = null;
+  while (existing.hasNext()) {
+    const candidate = existing.next();
+    if (!candidate.isTrashed()) { folder = candidate; break; }
+  }
+
+  if (!folder) folder = DriveApp.createFolder(folderName);
+
   setConfigValues_({ FOLDER_DRIVE_ID: folder.getId() });
   return folder;
 }
@@ -1378,8 +1317,8 @@ function getBootstrapData() {
         },
         isActiveDay: activeInfo.isActive,
         activeDaysLabel: activeDaysLabel_(cfg),
-        cutoff: { label: cutoffLabel_(cfg), epochMs: wib.cutoffEpochMs },
-        onTime: { label: onTimeLabel_(cfg) },
+        cutoff: { label: timeCfgLabel_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR), epochMs: wib.cutoffEpochMs },
+        onTime: { label: timeCfgLabel_(cfg, 'JAM_TEPAT_WAKTU', CONFIG.ONTIME_HOUR) },
         location: locationConfig_(cfg),
         isClosed: !!closedReason,
         closedReason: closedReason,
@@ -1675,7 +1614,7 @@ function submitAttendance(payload) {
         if (keterangan.length < 3) {
           throw new AppError(
             'REASON_REQUIRED',
-            'Keterangan wajib diisi minimal 3 karakter karena absen telat setelah pukul ' + onTimeLabel_(cfgAwal) + ' WIB.'
+            'Keterangan wajib diisi minimal 3 karakter karena absen telat setelah pukul ' + timeCfgLabel_(cfgAwal, 'JAM_TEPAT_WAKTU', CONFIG.ONTIME_HOUR) + ' WIB.'
           );
         }
         if (keterangan.length > CONFIG.MAX_REASON_LENGTH) {
@@ -1756,8 +1695,8 @@ function submitAttendance(payload) {
 
     const cfg = getConfigMap_();
     // Samakan status cutoff bila konfigurasi berubah sejak request diterima.
-    requestWib.isPastCutoff = requestWib.secondsOfDay >= cutoffSeconds_(cfg);
-    requestWib.cutoffEpochMs = requestWib.dayStartEpochMs + cutoffSeconds_(cfg) * 1000;
+    requestWib.isPastCutoff = requestWib.secondsOfDay >= timeCfgSeconds_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR);
+    requestWib.cutoffEpochMs = requestWib.dayStartEpochMs + timeCfgSeconds_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR) * 1000;
     const activeInfo = resolveActiveDay_(requestWib, cfg);
     const testMode = isTestMode_(cfg);
 
@@ -1775,7 +1714,7 @@ function submitAttendance(payload) {
       throw new AppError(
         'CLOSED',
         'Absensi hari ini sudah ditutup. Batas waktu pengisian pukul ' +
-        cutoffLabel_(cfg) + ' WIB telah berakhir.'
+        timeCfgLabel_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR) + ' WIB telah berakhir.'
       );
     }
 
@@ -1987,7 +1926,7 @@ function runDailyClosing_(forceSend) {
      * Trigger timeBased bisa menyala sedikit lebih awal. Bila itu terjadi,
      * tunggu sampai batas 10:00 WIB agar tidak menandai Alpha terlalu dini.
      */
-    const cutoffSec = cutoffSeconds_(cfg);
+    const cutoffSec = timeCfgSeconds_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR);
     if (wib.secondsOfDay < cutoffSec) {
       const waitMs = (cutoffSec - wib.secondsOfDay) * 1000 + 1000;
       if (waitMs <= 120000) {
@@ -2022,7 +1961,7 @@ function runDailyClosing_(forceSend) {
           p.nama,
           'Alpha',
           0,
-          'Tidak mengisi absensi hingga pukul ' + cutoffLabel_(cfg),
+          'Tidak mengisi absensi hingga pukul ' + timeCfgLabel_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR),
           '-'
         ]);
       });
@@ -2191,7 +2130,7 @@ function buildWaReport_(dateStr, participants, logRows, cfg) {
   const out = [];
   out.push('*LAPORAN ABSENSI HARIAN*');
   out.push(dateLabel_(dateStr));
-  out.push('Batas pengisian: ' + cutoffLabel_(cfg) + ' WIB');
+  out.push('Batas pengisian: ' + timeCfgLabel_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR) + ' WIB');
   out.push('');
   out.push('*RINGKASAN*');
   out.push('Total peserta: ' + counts.total);
@@ -2514,34 +2453,10 @@ function buildDailyXlsx_(dateStr, report, cfg, photos) {
 
 /* ------------------------- FONNTE WHATSAPP GATEWAY ------------------------- */
 
-/** Terjemahkan respons HTTP Fonnte menjadi hasil ringkas. */
-function describeFonnte_(response) {
-  const code = response.getResponseCode();
-  const body = response.getContentText() || '';
-
-  let parsed = null;
-  try { parsed = JSON.parse(body); } catch (err) { parsed = null; }
-
-  let ok = code >= 200 && code < 300;
-  if (parsed && parsed.status === false) ok = false;
-
-  let detail;
-  if (ok) {
-    detail = 'Pesan terkirim.';
-  } else if (parsed) {
-    detail = String(
-      parsed.reason || parsed.message || parsed.detail || body
-    ).slice(0, 300);
-  } else {
-    detail = ('HTTP ' + code + ': ' + body).slice(0, 300);
-  }
-
-  return { ok: ok, httpStatus: code, message: detail };
-}
-
 /**
- * Kirim satu payload ke Fonnte. Tidak pernah melempar error agar kegagalan
- * pengiriman tidak menggagalkan pencatatan absensi.
+ * Kirim satu payload ke Fonnte dan ringkas hasilnya.
+ * Tidak pernah melempar error agar kegagalan pengiriman tidak menggagalkan
+ * pencatatan absensi.
  */
 function postFonnte_(token, payload) {
   try {
@@ -2552,7 +2467,25 @@ function postFonnte_(token, payload) {
       muteHttpExceptions: true
     });
 
-    return describeFonnte_(response);
+    const code = response.getResponseCode();
+    const body = response.getContentText() || '';
+
+    let parsed = null;
+    try { parsed = JSON.parse(body); } catch (err) { parsed = null; }
+
+    let ok = code >= 200 && code < 300;
+    if (parsed && parsed.status === false) ok = false;
+
+    let detail;
+    if (ok) {
+      detail = 'Pesan terkirim.';
+    } else if (parsed) {
+      detail = String(parsed.reason || parsed.message || parsed.detail || body).slice(0, 300);
+    } else {
+      detail = ('HTTP ' + code + ': ' + body).slice(0, 300);
+    }
+
+    return { ok: ok, httpStatus: code, message: detail };
   } catch (err) {
     return {
       ok: false,
@@ -2580,58 +2513,6 @@ function sendWhatsAppImage_(token, target, imageUrl, caption) {
     message: String(caption || ''),
     url: String(imageUrl)
   });
-}
-
-/**
- * Kirim dokumen (XLSX) melalui Fonnte.
- * Bila Fonnte menolak parameter `filename`, coba sekali lagi tanpa parameter itu.
- */
-function sendWhatsAppFile_(token, target, fileUrl, fileName, caption) {
-  const first = postFonnte_(token, {
-    target: String(target),
-    message: String(caption || ''),
-    url: String(fileUrl),
-    filename: String(fileName || '')
-  });
-
-  if (first.ok) return first;
-
-  const second = postFonnte_(token, {
-    target: String(target),
-    message: String(caption || ''),
-    url: String(fileUrl)
-  });
-
-  return second.ok ? second : first;
-}
-
-/**
- * Kirim file dokumen melalui WhatsApp dengan multipart/form-data (langsung
- * dari Blob Drive, bukan URL). Lebih andal karena Fonnte tidak perlu
- * mengikuti redirect Google Drive yang kadang menghasilkan HTML.
- */
-function sendWhatsAppFileBlob_(token, target, blob, fileName, caption) {
-  try {
-    blob.setContentType(CONFIG.XLSX_MIME);
-    const payload = {
-      target: String(target),
-      message: String(caption || ''),
-      filename: String(fileName || ''),
-      file: blob
-    };
-    const result = postFonnte_(token, payload);
-    if (!result.ok) {
-      console.warn('Kirim dokumen multipart gagal: ' + result.message);
-    }
-    return result;
-  } catch (err) {
-    console.error('Gagal mengirim file lampiran via multipart: ' + (err && err.message));
-    return {
-      ok: false,
-      httpStatus: 0,
-      message: err && err.message ? err.message : String(err)
-    };
-  }
 }
 
 /**
@@ -2708,11 +2589,6 @@ function driveFileId_(link) {
 
   const query = text.match(/[?&]id=([A-Za-z0-9_-]{10,})/);
   return query ? query[1] : '';
-}
-
-/** URL gambar langsung yang dapat diunduh Fonnte untuk dikirim sebagai foto. */
-function driveDirectImageUrl_(fileId) {
-  return 'https://lh3.googleusercontent.com/d/' + String(fileId) + '=w1200';
 }
 
 /** URL pratinjau ringan untuk daftar publik (hemat kuota HP peserta). */
@@ -2888,7 +2764,7 @@ function deliverReport_(dateStr, report, cfg, options) {
         const photoResult = sendWhatsAppImage_(
           token,
           target.target,
-          driveDirectImageUrl_(photo.fileId),
+          driveThumbUrl_(photo.fileId, 1200),
           captionForPhoto_(photo)
         );
 
@@ -2941,15 +2817,25 @@ function sendTestWA() {
   return result;
 }
 
-/** Pratinjau rekap hari ini tanpa mengirim WhatsApp. */
-function previewLaporanHariIni() {
+/**
+ * Siapkan konteks rekap untuk satu tanggal (default hari ini).
+ * Dipakai bersama oleh fungsi pratinjau/uji agar tidak mengulang kode.
+ */
+function dailyReportContext_(dateStr) {
   ensureSheets_();
   const cfg = getConfigMap_();
   const wib = nowWib_(cfg);
-  const report = buildWaReport_(wib.dateStr, getParticipants_(), getLogByDate_(wib.dateStr), cfg);
-  Logger.log(report.text);
-  Logger.log(JSON.stringify(report.counts, null, 2));
-  return report;
+  const tanggal = toDateStr_(dateStr || wib.dateStr) || wib.dateStr;
+  const report = buildWaReport_(tanggal, getParticipants_(), getLogByDate_(tanggal), cfg);
+  return { cfg: cfg, wib: wib, tanggal: tanggal, report: report };
+}
+
+/** Pratinjau rekap hari ini tanpa mengirim WhatsApp. */
+function previewLaporanHariIni() {
+  const ctx = dailyReportContext_();
+  Logger.log(ctx.report.text);
+  Logger.log(JSON.stringify(ctx.report.counts, null, 2));
+  return ctx.report;
 }
 
 /**
@@ -2961,14 +2847,9 @@ function previewLaporanHariIni() {
  * @param {string=} dateStr Tanggal `YYYY-MM-DD`; kosong = hari ini.
  */
 function ujiBuatXlsx(dateStr) {
-  ensureSheets_();
-  const cfg = getConfigMap_();
-  const wib = nowWib_(cfg);
-  const tanggal = toDateStr_(dateStr || wib.dateStr) || wib.dateStr;
-
-  const report = buildWaReport_(tanggal, getParticipants_(), getLogByDate_(tanggal), cfg);
-  const photos = collectPhotos_(tanggal);
-  const info = buildDailyXlsx_(tanggal, report, cfg, photos);
+  const ctx = dailyReportContext_(dateStr);
+  const photos = collectPhotos_(ctx.tanggal);
+  const info = buildDailyXlsx_(ctx.tanggal, ctx.report, ctx.cfg, photos);
 
   Logger.log(JSON.stringify(info, null, 2));
   Logger.log('Buka file: ' + info.url);
@@ -2984,22 +2865,14 @@ function ujiBuatXlsx(dateStr) {
  * ditandai selesai.
  */
 function ujiKirimRekap() {
-  ensureSheets_();
-  const cfg = getConfigMap_();
-  const wib = nowWib_(cfg);
-  const report = buildWaReport_(
-    wib.dateStr,
-    getParticipants_(),
-    getLogByDate_(wib.dateStr),
-    cfg
-  );
+  const ctx = dailyReportContext_();
 
   const prefix =
     '*[MODE UJI] REKAP MANUAL*\n' +
     'Dikirim dari fungsi ujiKirimRekap(). Baris Alpha di bawah hanya ' +
     'perhitungan dan TIDAK ditulis ke Log_Absensi.\n\n';
 
-  const delivery = deliverReport_(wib.dateStr, report, cfg, { prefix: prefix });
+  const delivery = deliverReport_(ctx.tanggal, ctx.report, ctx.cfg, { prefix: prefix });
   Logger.log(JSON.stringify(delivery, null, 2));
   return delivery;
 }
@@ -3294,7 +3167,7 @@ function setupProject(waNumber, fonnteToken) {
   const sheets = step_('siapkan sheet', ensureSheets_);
   step_('rapikan format sheet', function () { return formatSheets_(sheets); });
 
-  const folder = step_('siapkan folder foto', getOrCreatePhotoFolder_);
+  const folder = step_('siapkan folder foto', function () { return getPhotoFolder_(getConfigMap_()); });
 
   const updates = { FOLDER_DRIVE_ID: folder.getId() };
   if (wa) updates.NO_WA_GURU = normalizeWaNumber_(wa);
@@ -3320,7 +3193,7 @@ function setupProject(waNumber, fonnteToken) {
     folderDrive: folder.getName(),
     folderDriveId: folder.getId(),
     trigger: 'processDailyClosingAndSendWA - setiap hari pukul ' +
-      cutoffLabel_(cfg) + ' ' + CONFIG.TIMEZONE,
+      timeCfgLabel_(cfg, 'JAM_TUTUP', CONFIG.CUTOFF_HOUR) + ' ' + CONFIG.TIMEZONE,
     zonaWaktu: ss.getSpreadsheetTimeZone(),
     perbaikanTanggal: perbaikanTanggal,
     konfigurasiBelumDiisi: belumDiisi,
@@ -3346,6 +3219,7 @@ function setupProject(waNumber, fonnteToken) {
 function diagnosaSistem() {
   const ss = getSpreadsheet_();
   const cfg = getConfigMap_();
+  const wib = nowWib_(cfg);
 
   const sheetsInfo = [CONFIG.SHEET_MASTER, CONFIG.SHEET_LOG, CONFIG.SHEET_CONFIG].map(function (name) {
     const sheet = ss.getSheetByName(name);
@@ -3389,6 +3263,13 @@ function diagnosaSistem() {
       KIRIM_TEKS_REKAP: cfg.KIRIM_TEKS_REKAP || 'tidak',
       KIRIM_FOTO_WA: cfg.KIRIM_FOTO_WA || 'tidak',
       PUBLIK_ALASAN: cfg.PUBLIK_ALASAN || 'ya',
+      JAM_TUTUP: cfg.JAM_TUTUP || '(kosong)',
+      JAM_TEPAT_WAKTU: cfg.JAM_TEPAT_WAKTU || '(kosong)',
+      NAMA_LOKASI: cfg.NAMA_LOKASI || '(kosong)',
+      LAT_SEKOLAH: cfg.LAT_SEKOLAH || '(kosong)',
+      LON_SEKOLAH: cfg.LON_SEKOLAH || '(kosong)',
+      RADIUS_LOKASI: cfg.RADIUS_LOKASI || '(kosong)',
+      WAJIB_LOKASI: cfg.WAJIB_LOKASI || '(kosong)',
       MODE_UJI: cfg.MODE_UJI || 'tidak',
       HARI_AKTIF: cfg.HARI_AKTIF || CONFIG.DEFAULT_ACTIVE_DAYS,
       TANGGAL_LIBUR: cfg.TANGGAL_LIBUR || '(kosong)',
@@ -3397,7 +3278,7 @@ function diagnosaSistem() {
       LAST_REPORT_SENT_DATE: cfg.LAST_REPORT_SENT_DATE || '(belum pernah)',
       LAST_WA_STATUS: cfg.LAST_WA_STATUS || '(belum ada)'
     },
-    waktuServer: nowWib_().dateStr + ' ' + nowWib_().timeLabel + ' ' + CONFIG.TIMEZONE
+    waktuServer: wib.dateStr + ' ' + wib.timeLabel + ' ' + CONFIG.TIMEZONE
   };
 
   Logger.log(JSON.stringify(info, null, 2));
@@ -3416,6 +3297,11 @@ function onOpen() {
       .addItem('Kirim Ulang Laporan', 'resendWhatsAppReport')
       .addItem('Uji Buat XLSX (tanpa kirim)', 'ujiBuatXlsx')
       .addItem('Uji Kirim Rekap', 'ujiKirimRekap')
+      .addSeparator()
+      .addItem('Sinkronkan Trigger Harian', 'aturTriggerHarian')
+      .addItem('Cek Konfigurasi Jam', 'cekKonfigurasiJam')
+      .addItem('Cek Konfigurasi Lokasi', 'cekKonfigurasiLokasi')
+      .addItem('Perbaiki Konfigurasi Lokasi', 'perbaikiKonfigurasiLokasi')
       .addSeparator()
       .addItem('Perbaiki Kolom Tanggal', 'perbaikiTanggalLog')
       .addItem('Hapus Data Uji', 'hapusBarisUji')
